@@ -1,0 +1,11 @@
+# Created automatically by start.bat / reset_demo.bat
+data/stockcheck.db
+data/stockcheck.db-journal
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local tooling and build output that isn't part of the project
+.claude/
+demo/stock-check-artifact.html

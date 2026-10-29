@@ -1,0 +1,48 @@
+<section class="demo-intro" aria-labelledby="demo-intro-title">
+  <details id="demo-intro-details" open>
+    <summary>
+      <span class="demo-eyebrow">Personal concept project · interactive demo</span>
+      <span id="demo-intro-title" class="demo-title">One scan <span class="dim">instead of six steps across two systems</span></span>
+    </summary>
+    <div class="demo-grid">
+      <div class="demo-story">
+        <p>When a picker reaches an empty pick slot, a certifier checks whether product is anywhere else in the building. Today that means copying codes between a route program and two pages of an inventory website, and then turning the product off by hand. This prototype puts the whole check on one screen.</p>
+        <div class="demo-compare">
+          <div>
+            <h3>Today: 6 steps, 2 systems</h3>
+            <ol>
+              <li>Find the product in the route program</li>
+              <li>Copy its product code</li>
+              <li>Paste it into the inventory site to get a second code</li>
+              <li>Paste that code into another page to see reserve stock</li>
+              <li>Tell the picker where to go, or</li>
+              <li>Go back and turn the product off</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Prototype: 1 scan</h3>
+            <ol>
+              <li>Scan or type the code and press Enter</li>
+              <li>Read the location aloud, or press <b>Turn off product</b> and confirm the EMPTY SLOT step</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+      <div class="demo-try">
+        <h3>Try it</h3>
+        <div class="demo-chips">
+          <button class="demo-chip" data-try="RT-76823"><span class="mono">RT-76823</span>In stock in reserve</button>
+          <button class="demo-chip" data-try="RT-45054"><span class="mono">RT-45054</span>Stock only in the pick slot</button>
+          <button class="demo-chip" data-try="RT-20172"><span class="mono">RT-20172</span>Out of stock: turn it off</button>
+          <button class="demo-chip" data-try="RT-95569"><span class="mono">RT-95569</span>Already turned off</button>
+          <button class="demo-chip" data-try="RT-99999"><span class="mono">RT-99999</span>Unknown code</button>
+        </div>
+        <div class="demo-actions">
+          <button class="btn btn-primary" id="demo-queue">Load a shift-start queue</button>
+          <button class="btn btn-ghost" id="demo-reset">Reset demo</button>
+        </div>
+        <p class="demo-note">All products, codes, routes, locations and quantities are made up. Not connected to or endorsed by any company. Your clicks are saved only in this browser.</p>
+      </div>
+    </div>
+  </details>
+</section>

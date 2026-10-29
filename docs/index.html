@@ -1,0 +1,1711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stock Check</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Prototype that combines a multi-system warehouse out-of-stock check into one screen. All data is made up.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: a quiet near-black console. Fixed sidebar for navigation and today's counts; the main pane
+   carries one light-weight page title, thin-bordered panels, and outcomes that glow in their status color. */
+:root {
+  color-scheme: dark;
+
+  --font-ui: "Geist", "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  --font-mono: "Geist Mono", Consolas, "Cascadia Mono", ui-monospace, monospace;
+
+  --bg: #08080a;
+  --bg-glow: #15151b;
+  --panel: #111114;
+  --panel-2: #18181c;
+  --panel-3: #202026;
+  --line: rgba(255, 255, 255, .08);
+  --line-strong: rgba(255, 255, 255, .14);
+  --ink: #ededef;
+  --ink-2: #b4b4bb;
+  --muted: #7c7c86;
+  --faint: #55555e;
+  --placeholder: #4d4d55;
+  --hover: rgba(255, 255, 255, .04);
+  --active: rgba(255, 255, 255, .07);
+
+  --primary: #ededef;
+  --primary-hover: #ffffff;
+  --primary-ink: #0b0b0d;
+  --focus: #9aa8ff;
+  --focus-ring: rgba(154, 168, 255, .25);
+
+  --good: #4ade80;
+  --good-soft: rgba(74, 222, 128, .1);
+  --good-line: rgba(74, 222, 128, .28);
+  --good-solid: #1f8a4c;
+  --good-solid-hover: #24a259;
+  --bad: #ff6b6b;
+  --bad-soft: rgba(255, 107, 107, .1);
+  --bad-line: rgba(255, 107, 107, .3);
+  --bad-solid: #d93a3a;
+  --bad-solid-hover: #ec4646;
+  --warn: #fbbf4a;
+  --warn-soft: rgba(251, 191, 74, .1);
+  --warn-line: rgba(251, 191, 74, .35);
+  --info: #9aa8ff;
+  --info-soft: rgba(154, 168, 255, .1);
+  --info-line: rgba(154, 168, 255, .3);
+  --neutral-soft: rgba(255, 255, 255, .06);
+  --solid-ink: #ffffff;
+  --callout-bg: #fbbf4a;
+  --callout-ink: #141006;
+
+  --dot-blue: #7c8cff;
+  --dot-green: #4ade80;
+  --dot-red: #ff6b6b;
+  --dot-amber: #fbbf4a;
+
+  --chart: #8f9bff;
+  --chart-glow: rgba(143, 155, 255, .55);
+  --chart-fill: rgba(143, 155, 255, .22);
+  --chart-avg: #6b6b75;
+  --grid: rgba(255, 255, 255, .06);
+
+  --tooltip-bg: #ededef;
+  --tooltip-ink: #0b0b0d;
+  --backdrop: rgba(0, 0, 0, .7);
+  --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 12px 32px rgba(0, 0, 0, .35);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, .7);
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --side-w: 264px;
+  font-size: 17px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: var(--font-ui);
+  background: radial-gradient(1200px 700px at 70% -10%, var(--bg-glow), transparent 70%), var(--bg);
+  background-attachment: fixed;
+  color: var(--ink);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
+kbd {
+  font: 500 .68rem/1 var(--font-mono);
+  min-width: 20px; padding: 3px 5px; border-radius: 5px; text-align: center;
+  background: var(--panel-3); border: 1px solid var(--line-strong); color: var(--ink-2);
+}
+.muted { color: var(--muted); }
+.mono { font-family: var(--font-mono); }
+h1, h2, h3 { text-wrap: balance; }
+svg { flex: none; }
+
+/* ---------- shell ---------- */
+.shell { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); min-height: 100vh; }
+
+.sidebar {
+  position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  padding-block: 18px;
+  padding-left: max(14px, env(safe-area-inset-left, 0px)); padding-right: 14px;
+  background: var(--panel); border-right: 1px solid var(--line);
+}
+.side-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 10px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: var(--ink); color: var(--primary-ink); }
+.brand-mark svg { width: 17px; height: 17px; }
+.brand-title { font-weight: 600; font-size: 1.02rem; letter-spacing: -.01em; }
+.side-tag { font: 500 .66rem var(--font-mono); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 6px; padding: 3px 6px; }
+
+.side-search {
+  font: inherit; display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 10px; margin-bottom: 8px; border-radius: var(--radius-sm); cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: .9rem;
+}
+.side-search svg { width: 16px; height: 16px; }
+.side-search span { flex: 1; text-align: left; }
+.side-search:hover { border-color: var(--line-strong); color: var(--ink-2); }
+.side-search:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.side-label { font-size: .78rem; color: var(--faint); padding: 14px 8px 4px; }
+.nav { display: grid; gap: 2px; }
+.tab {
+  font: inherit; font-size: .93rem; font-weight: 450; text-align: left;
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  background: transparent; border: 1px solid transparent; color: var(--ink-2);
+}
+.tab svg { width: 18px; height: 18px; color: var(--muted); }
+.tab span:first-of-type { flex: 1; }
+.tab:hover { background: var(--hover); color: var(--ink); }
+.tab.active { background: var(--active); border-color: var(--line); color: var(--ink); }
+.tab.active svg { color: var(--ink); }
+.tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.nav-count { font: 500 .75rem var(--font-mono); color: var(--muted); }
+.nav-count kbd { opacity: .7; }
+.badge { background: var(--warn); color: var(--callout-ink); border-radius: 99px; padding: 1px 7px; font-weight: 600; }
+.badge[hidden] { display: none; }
+
+.side-stats { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.side-stats li { display: flex; align-items: center; gap: 11px; padding: 7px 10px; font-size: .9rem; color: var(--ink-2); }
+.side-stats span { margin-left: auto; font: 500 .78rem var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin: 0 5px; }
+.dot-blue { background: var(--dot-blue); box-shadow: 0 0 10px var(--dot-blue); }
+.dot-green { background: var(--dot-green); box-shadow: 0 0 10px var(--dot-green); }
+.dot-red { background: var(--dot-red); box-shadow: 0 0 10px var(--dot-red); }
+.dot-amber { background: var(--dot-amber); box-shadow: 0 0 10px var(--dot-amber); }
+.side-foot { margin-top: auto; padding: 14px 8px 0; font-size: .74rem; color: var(--faint); line-height: 1.4; }
+
+.main-col { min-width: 0; display: flex; flex-direction: column; }
+.topbar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding-block: 14px;
+  padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px));
+  background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.crumb { display: flex; align-items: center; gap: 9px; font-size: .92rem; color: var(--ink-2); }
+.crumb svg { width: 16px; height: 16px; color: var(--muted); }
+.clock { font: 500 .9rem var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+main {
+  width: 100%; max-width: 1360px;
+  padding-block: 28px 64px;
+  padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px));
+}
+.view { display: none; }
+.view.active { display: block; }
+.page-title { font-size: 2.3rem; font-weight: 400; letter-spacing: -.025em; line-height: 1.1; margin: 0 0 22px; }
+.page-title .dim { color: var(--faint); }
+
+/* ---------- buttons ---------- */
+.btn {
+  font: inherit; font-weight: 500; font-size: .95rem;
+  border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--ink);
+  padding: 9px 16px; border-radius: var(--radius-sm); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+}
+.btn:hover { background: var(--panel-3); }
+.btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn-danger { background: var(--bad-solid); border-color: var(--bad-solid); color: var(--solid-ink); }
+.btn-danger:hover { background: var(--bad-solid-hover); border-color: var(--bad-solid-hover); }
+.btn-good { background: var(--good-solid); border-color: var(--good-solid); color: var(--solid-ink); }
+.btn-good:hover { background: var(--good-solid-hover); border-color: var(--good-solid-hover); }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn-ghost:hover { color: var(--ink); background: var(--hover); }
+.btn-lg { font-size: 1.05rem; padding: 12px 20px; }
+.btn-xl { font-size: 1.15rem; padding: 0 30px; }
+.btn svg { width: 1.15em; height: 1.15em; }
+.btn kbd { background: transparent; }
+
+/* ---------- panels ---------- */
+.card, .scan-form, .result, .queue-panel, .tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.card { padding: 18px 20px; margin-bottom: 18px; }
+.card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+.card-head h2 { margin: 0; font-size: 1rem; font-weight: 500; }
+.card-label { font-size: .85rem; color: var(--muted); }
+.card-value { font-size: 1.9rem; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+
+/* ---------- scan input ---------- */
+.scan-form { padding: 18px 20px; margin-bottom: 18px; }
+.scan-label { display: block; font-size: .88rem; color: var(--muted); margin-bottom: 10px; }
+.hint { color: var(--faint); margin-left: 8px; }
+.scan-row { display: flex; gap: 10px; }
+.scan-input {
+  flex: 1; min-width: 0;
+  font: 500 2.2rem/1.1 var(--font-mono); letter-spacing: .02em; text-transform: uppercase;
+  padding: 14px 18px; border-radius: 11px;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--line-strong);
+}
+.scan-input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 4px var(--focus-ring); }
+.scan-input::placeholder { color: var(--placeholder); text-transform: none; }
+.compact .scan-input { font-size: 1.35rem; padding: 10px 12px; }
+
+/* ---------- result card ---------- */
+.result-area { min-width: 0; }
+.result-area .empty-state {
+  border: 1px dashed var(--line-strong); border-radius: var(--radius);
+  padding: 56px 20px; text-align: center; color: var(--muted);
+}
+.result { overflow: hidden; }
+.verdict {
+  --tone: var(--ink-2); --tone-soft: var(--neutral-soft);
+  display: flex; align-items: center; gap: 18px; padding: 22px 24px;
+  background: radial-gradient(130% 160% at 0% 0%, var(--tone-soft), transparent 60%);
+  border-bottom: 1px solid var(--line);
+}
+.verdict .icon {
+  width: 58px; height: 58px; padding: 11px; border-radius: 16px; flex: none;
+  color: var(--tone); background: var(--tone-soft); border: 1px solid var(--tone-line, var(--line));
+  filter: drop-shadow(0 0 14px var(--tone-soft));
+}
+.verdict .icon svg { width: 100%; height: 100%; }
+.verdict-text { font-size: 2.5rem; font-weight: 600; letter-spacing: -.01em; line-height: 1; color: var(--tone); }
+.verdict-sub { font-size: 1rem; color: var(--ink-2); margin-top: 7px; }
+.verdict.good { --tone: var(--good); --tone-soft: var(--good-soft); --tone-line: var(--good-line); }
+.verdict.bad { --tone: var(--bad); --tone-soft: var(--bad-soft); --tone-line: var(--bad-line); }
+.verdict.warn { --tone: var(--warn); --tone-soft: var(--warn-soft); --tone-line: var(--warn-line); }
+
+.result-body { padding: 22px 24px 24px; display: grid; gap: 22px; }
+.product-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.product-name { font-size: 1.75rem; font-weight: 500; letter-spacing: -.02em; }
+.product-pack { font-size: 1.2rem; color: var(--muted); }
+.codes { display: flex; gap: 10px; flex-wrap: wrap; }
+.code-chip { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.code-chip small { display: block; color: var(--muted); font-size: .74rem; margin-bottom: 2px; }
+.code-chip .mono { font-size: 1.12rem; font-weight: 500; }
+.lookup-steps { font: .78rem var(--font-mono); color: var(--faint); }
+
+.send-to {
+  border: 1px solid var(--good-line); border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--good-soft), transparent 120%);
+  padding: 18px 20px;
+}
+.send-to-label { font-size: .85rem; color: var(--good); }
+.send-to-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 22px; margin-top: 6px; }
+.send-loc { font: 500 3.5rem/1.05 var(--font-mono); letter-spacing: -.02em; color: var(--ink); }
+.send-qty { font-size: 1.6rem; font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.send-type { font: .9rem var(--font-mono); color: var(--good); }
+.send-note { margin-top: 10px; color: var(--warn); font-size: .95rem; }
+
+.action-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.action-row .muted { font-size: .88rem; }
+
+.reminder {
+  border: 1px solid var(--warn-line); border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--warn-soft), transparent 140%);
+  padding: 18px 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+}
+.reminder .icon { width: 46px; height: 46px; color: var(--warn); flex: none; }
+.reminder-text { font-size: 1.55rem; font-weight: 500; letter-spacing: -.01em; flex: 1; min-width: min(260px, 100%); }
+.reminder-text b { background: var(--callout-bg); color: var(--callout-ink); padding: 0 9px; border-radius: 7px; font-weight: 600; white-space: nowrap; }
+.done-banner {
+  border: 1px solid var(--good-line); background: var(--good-soft); color: var(--good);
+  border-radius: var(--radius); padding: 14px 18px; font-size: 1.15rem; font-weight: 500;
+  display: flex; align-items: center; gap: 10px;
+}
+.done-banner svg { width: 26px; height: 26px; }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.two-col > * { min-width: 0; }
+.section-title { font-size: .85rem; font-weight: 400; color: var(--muted); margin: 0 0 8px; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+.table th { text-align: left; font-size: .78rem; font-weight: 400; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+.table td b { color: var(--ink); font-weight: 500; }
+.table .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.table td.mono { color: var(--ink); }
+.table tr.zero td { color: var(--faint); }
+.table tr.highlight td { background: var(--good-soft); color: var(--ink); }
+.table tr:last-child td { border-bottom: none; }
+.truck { color: var(--ink) !important; font-family: var(--font-mono); }
+
+/* ---------- status pills ---------- */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: .8rem; font-weight: 500; padding: 3px 9px 3px 7px; border-radius: 99px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.pill svg { width: 15px; height: 15px; }
+.pill.good { background: var(--good-soft); color: var(--good); border-color: var(--good-line); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); border-color: var(--bad-line); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-line); }
+.pill.info { background: var(--info-soft); color: var(--info); border-color: var(--info-line); }
+.pill.neutral { background: var(--neutral-soft); color: var(--ink-2); border-color: var(--line-strong); }
+
+/* ---------- queue ---------- */
+.queue-layout { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 18px; align-items: start; }
+.queue-panel { padding: 0 0 16px; position: sticky; top: 76px; min-width: 0; overflow: hidden; }
+.queue-panel .scan-form { box-shadow: none; border: none; border-bottom: 1px solid var(--line); border-radius: 0; margin: 0; background: transparent; }
+.paste-box { margin-top: 10px; font-size: .9rem; }
+.paste-box summary { cursor: pointer; color: var(--muted); }
+.paste-box summary:hover { color: var(--ink); }
+.paste-box textarea { width: 100%; margin: 8px 0; font: .95rem var(--font-mono); padding: 8px; border-radius: 8px; background: var(--bg); color: var(--ink); border: 1px solid var(--line-strong); }
+.queue-summary { padding: 12px 20px 8px; color: var(--muted); font: .78rem var(--font-mono); }
+.queue-list { list-style: none; margin: 0; padding: 0 10px; max-height: 52vh; overflow-y: auto; display: grid; gap: 4px; }
+.queue-item {
+  display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center;
+  padding: 10px; border: 1px solid transparent; border-radius: 10px; cursor: pointer;
+}
+.queue-item:hover { background: var(--hover); }
+.queue-item.current { background: var(--active); border-color: var(--line-strong); }
+.queue-num { font: .78rem var(--font-mono); color: var(--faint); text-align: center; }
+.queue-code { font: 500 1rem var(--font-mono); }
+.queue-name { font-size: .82rem; color: var(--muted); }
+.queue-status { margin-top: 6px; }
+.queue-remove { background: none; border: none; color: var(--faint); font-size: 1.2rem; cursor: pointer; padding: 2px 7px; border-radius: 6px; }
+.queue-remove:hover { background: var(--bad-soft); color: var(--bad); }
+.queue-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 16px 0; }
+.queue-actions .btn-lg { width: 100%; }
+
+/* ---------- log ---------- */
+.search { font: inherit; font-size: .9rem; padding: 9px 12px; border-radius: var(--radius-sm); min-width: 300px; background: var(--bg); color: var(--ink); border: 1px solid var(--line-strong); }
+.search:focus { outline: none; border-color: var(--focus); }
+.search::placeholder { color: var(--placeholder); }
+.off-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.off-row:last-child { border-bottom: none; padding-bottom: 0; }
+.off-info { flex: 1; min-width: min(240px, 100%); }
+.off-name { font-weight: 500; }
+.off-info .muted { font-size: .85rem; }
+
+/* ---------- stats ---------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 14px; margin-bottom: 18px; }
+.tile { padding: 16px 18px; }
+.tile-label { font-size: .85rem; color: var(--muted); }
+.tile-value { font-size: 2.1rem; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 4px; }
+.tile-sub { font: .78rem var(--font-mono); color: var(--muted); margin-top: 4px; }
+.tile-sub .up { color: var(--good); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: .85rem; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.swatch { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--chart); }
+.swatch-line { box-shadow: 0 0 6px var(--chart-glow); }
+.swatch-dash { border-top: 2px dashed var(--chart-avg); }
+
+.chart { position: relative; height: 300px; }
+.chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chart .grid-line { stroke: var(--grid); stroke-width: 1; }
+.chart .axis-label { fill: var(--faint); font: 11px var(--font-mono); }
+.chart .axis-label.now { fill: var(--ink); }
+.chart .line-today { fill: none; stroke: var(--chart); stroke-width: 2.25; filter: drop-shadow(0 0 6px var(--chart-glow)); }
+.chart .line-avg { fill: none; stroke: var(--chart-avg); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.chart .pt { fill: var(--bg); stroke: var(--chart); stroke-width: 2; }
+.chart .pt-label { fill: var(--ink); font: 600 12px var(--font-mono); }
+.chart .crosshair { stroke: var(--line-strong); stroke-width: 1; }
+.chart .hit { fill: transparent; cursor: default; }
+.tooltip {
+  position: absolute; pointer-events: none; z-index: 5;
+  background: var(--tooltip-bg); color: var(--tooltip-ink); padding: 8px 11px; border-radius: 9px;
+  font-size: .82rem; line-height: 1.4; white-space: nowrap; transform: translate(-50%, calc(-100% - 12px)); display: none;
+  box-shadow: var(--shadow-lg);
+}
+.tooltip b { font-weight: 600; }
+.table-toggle { margin-top: 18px; font-size: .9rem; }
+.table-toggle summary { cursor: pointer; color: var(--muted); }
+.table-toggle summary:hover { color: var(--ink); }
+
+/* ---------- dialog / toast ---------- */
+.dialog { border: 1px solid var(--line-strong); border-radius: 16px; padding: 0; max-width: 520px; width: 92vw; box-shadow: var(--shadow-lg); background: var(--panel); color: var(--ink); }
+.dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
+.dialog form { padding: 24px 26px; }
+.dialog h2 { margin: 0 0 10px; font-size: 1.35rem; font-weight: 500; }
+.dialog p { color: var(--ink-2); margin: 0 0 22px; }
+.dialog p b { color: var(--ink); font-weight: 500; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.toast {
+  position: fixed; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%) translateY(30px);
+  background: var(--tooltip-bg); color: var(--tooltip-ink); padding: 11px 18px; border-radius: 10px; font-weight: 500; font-size: .92rem;
+  opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100vw - 32px); box-shadow: var(--shadow-lg);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- web demo intro (only in the shareable demo) ---------- */
+.demo-intro { margin-bottom: 26px; }
+.demo-intro details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; }
+.demo-intro summary { cursor: pointer; display: grid; gap: 4px; list-style: none; }
+.demo-intro summary::-webkit-details-marker { display: none; }
+.demo-intro summary::after { content: "Hide intro"; justify-self: start; font-size: .8rem; color: var(--muted); margin-top: 4px; text-decoration: underline; text-underline-offset: 3px; }
+.demo-intro details:not([open]) summary::after { content: "About this project"; }
+.demo-eyebrow { font: .74rem var(--font-mono); color: var(--muted); }
+.demo-title { font-size: 1.6rem; font-weight: 400; letter-spacing: -.02em; line-height: 1.2; }
+.demo-title .dim { color: var(--faint); }
+.demo-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px 32px; margin-top: 16px; }
+.demo-story p { margin: 0 0 16px; max-width: 65ch; color: var(--ink-2); font-size: .95rem; }
+.demo-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.demo-compare > div { background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 12px 14px; }
+.demo-compare > div:last-child { border-color: var(--good-line); background: var(--good-soft); }
+.demo-compare h3, .demo-try h3 { margin: 0 0 8px; font-size: .82rem; font-weight: 400; color: var(--muted); }
+.demo-compare > div:last-child h3 { color: var(--good); }
+.demo-compare ol { margin: 0; padding-left: 1.3em; font-size: .86rem; color: var(--ink-2); display: grid; gap: 3px; }
+.demo-compare ol b { color: var(--ink); font-weight: 500; }
+.demo-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.demo-chip {
+  font: inherit; font-size: .82rem; text-align: left; cursor: pointer;
+  display: grid; gap: 2px; padding: 8px 11px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.demo-chip .mono { font-size: .95rem; font-weight: 500; color: var(--ink); }
+.demo-chip:hover { border-color: var(--line-strong); background: var(--panel-3); }
+.demo-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.demo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.demo-note { margin: 12px 0 0; font-size: .76rem; color: var(--faint); max-width: 60ch; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1150px) {
+  .queue-layout { grid-template-columns: 1fr; }
+  .queue-panel { position: static; }
+  .two-col { grid-template-columns: 1fr; }
+  .demo-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 860px) {
+  :root { font-size: 16px; }
+  .shell { grid-template-columns: 1fr; }
+  .sidebar {
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; height: auto; overflow: visible;
+    flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding-block: 10px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    border-right: none; border-bottom: 1px solid var(--line);
+  }
+  .side-head { padding: 0; flex: 1; }
+  .side-search, .side-label, .side-stats, .side-foot, .nav-count:not(.badge) { display: none; }
+  .nav { display: flex; flex: 1 1 100%; overflow-x: auto; gap: 4px; scrollbar-width: none; }
+  .tab { width: auto; flex: none; padding: 7px 10px; gap: 8px; font-size: .9rem; }
+  .tab svg { width: 16px; height: 16px; }
+  .topbar { display: none; }
+  main {
+    padding-block: 20px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .page-title { font-size: 1.8rem; margin-bottom: 16px; }
+}
+
+@media (max-width: 600px) {
+  .dialog kbd { display: none; }
+  .scan-form { padding: 14px; }
+  .scan-input { font-size: 1.45rem; padding: 10px 12px; }
+  .btn-xl { font-size: 1.05rem; padding: 0 16px; }
+  .hint { display: block; margin: 2px 0 0; }
+  .verdict { padding: 16px; gap: 12px; }
+  .verdict .icon { width: 44px; height: 44px; padding: 8px; border-radius: 12px; }
+  .verdict-text { font-size: 1.75rem; }
+  .result-body { padding: 16px; gap: 18px; }
+  .product-name { font-size: 1.4rem; }
+  .send-loc { font-size: 2.4rem; }
+  .send-qty { font-size: 1.25rem; }
+  .reminder-text { font-size: 1.25rem; }
+  .search { min-width: 0; width: 100%; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .tile { padding: 12px 14px; }
+  .tile-value { font-size: 1.55rem; }
+  .tile-sub { font-size: .7rem; }
+  .chart { height: 240px; }
+  .demo-compare { grid-template-columns: 1fr; }
+  .demo-intro details { padding: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: none; }
+}
+
+</style>
+</head>
+<body>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="side-head">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4v10l-9 4-9-4z M3 7l9 4 9-4 M12 11v10" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="brand-title">Stock Check</span>
+        </div>
+        <span class="side-tag">Prototype</span>
+      </div>
+
+      <button class="side-search" id="side-search" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>Check a code</span>
+        <kbd>F1</kbd>
+      </button>
+
+      <div class="side-label">Navigation</div>
+      <nav class="nav" role="tablist">
+        <button class="tab active" data-view="check" data-label="Check" role="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M8 8v8M11 8v8M14 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Check</span><span class="nav-count"><kbd>F1</kbd></span>
+        </button>
+        <button class="tab" data-view="queue" data-label="Shift queue" role="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Shift queue</span><span class="nav-count badge" id="queue-badge" hidden>0</span>
+        </button>
+        <button class="tab" data-view="log" data-label="Activity log" role="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Activity log</span><span class="nav-count" id="off-count"></span>
+        </button>
+        <button class="tab" data-view="stats" data-label="Stats" role="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18M6 16l4-5 3 3 5-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Stats</span><span class="nav-count"><kbd>F4</kbd></span>
+        </button>
+      </nav>
+
+      <div class="side-label">Today</div>
+      <ul class="side-stats" id="side-stats">
+        <li><i class="dot dot-blue"></i>Checks<span id="ss-checks">–</span></li>
+        <li><i class="dot dot-green"></i>Sent to stock<span id="ss-instock">–</span></li>
+        <li><i class="dot dot-red"></i>Turned off now<span id="ss-off">–</span></li>
+        <li><i class="dot dot-amber"></i>Queue pending<span id="ss-queue">–</span></li>
+      </ul>
+
+      <div class="side-foot">Mock data only. Not connected to any company system.</div>
+    </aside>
+
+    <div class="main-col">
+      <header class="topbar">
+        <div class="crumb">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="4" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="14" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span id="crumb-label">Check</span>
+        </div>
+        <div class="clock" id="clock"></div>
+      </header>
+
+      <main>
+        <section class="demo-intro" aria-labelledby="demo-intro-title">
+  <details id="demo-intro-details" open>
+    <summary>
+      <span class="demo-eyebrow">Personal concept project · interactive demo</span>
+      <span id="demo-intro-title" class="demo-title">One scan <span class="dim">instead of six steps across two systems</span></span>
+    </summary>
+    <div class="demo-grid">
+      <div class="demo-story">
+        <p>When a picker reaches an empty pick slot, a certifier checks whether product is anywhere else in the building. Today that means copying codes between a route program and two pages of an inventory website, and then turning the product off by hand. This prototype puts the whole check on one screen.</p>
+        <div class="demo-compare">
+          <div>
+            <h3>Today: 6 steps, 2 systems</h3>
+            <ol>
+              <li>Find the product in the route program</li>
+              <li>Copy its product code</li>
+              <li>Paste it into the inventory site to get a second code</li>
+              <li>Paste that code into another page to see reserve stock</li>
+              <li>Tell the picker where to go, or</li>
+              <li>Go back and turn the product off</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Prototype: 1 scan</h3>
+            <ol>
+              <li>Scan or type the code and press Enter</li>
+              <li>Read the location aloud, or press <b>Turn off product</b> and confirm the EMPTY SLOT step</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+      <div class="demo-try">
+        <h3>Try it</h3>
+        <div class="demo-chips">
+          <button class="demo-chip" data-try="RT-76823"><span class="mono">RT-76823</span>In stock in reserve</button>
+          <button class="demo-chip" data-try="RT-45054"><span class="mono">RT-45054</span>Stock only in the pick slot</button>
+          <button class="demo-chip" data-try="RT-20172"><span class="mono">RT-20172</span>Out of stock: turn it off</button>
+          <button class="demo-chip" data-try="RT-95569"><span class="mono">RT-95569</span>Already turned off</button>
+          <button class="demo-chip" data-try="RT-99999"><span class="mono">RT-99999</span>Unknown code</button>
+        </div>
+        <div class="demo-actions">
+          <button class="btn btn-primary" id="demo-queue">Load a shift-start queue</button>
+          <button class="btn btn-ghost" id="demo-reset">Reset demo</button>
+        </div>
+        <p class="demo-note">All products, codes, routes, locations and quantities are made up. Not connected to or endorsed by any company. Your clicks are saved only in this browser.</p>
+      </div>
+    </div>
+  </details>
+</section>
+
+        <!-- CHECK ---------------------------------------------------------->
+        <section id="view-check" class="view active">
+          <h1 class="page-title">Stock check <span class="dim js-date"></span></h1>
+          <form id="check-form" class="scan-form" autocomplete="off">
+            <label for="check-input" class="scan-label">Product code from picker <span class="hint">Type or scan, then press Enter</span></label>
+            <div class="scan-row">
+              <input id="check-input" class="scan-input" placeholder="e.g. RT-48213" autofocus spellcheck="false">
+              <button class="btn btn-primary btn-xl" type="submit">Check</button>
+            </div>
+          </form>
+          <div id="check-result" class="result-area">
+            <div class="empty-state">Scan or type a product code to check stock.</div>
+          </div>
+        </section>
+
+        <!-- QUEUE ---------------------------------------------------------->
+        <section id="view-queue" class="view">
+          <h1 class="page-title">Shift queue <span class="dim" id="queue-title-count"></span></h1>
+          <div class="queue-layout">
+            <aside class="queue-panel">
+              <form id="queue-form" class="scan-form compact" autocomplete="off">
+                <label for="queue-input" class="scan-label">Add codes <span class="hint">Enter after each one</span></label>
+                <div class="scan-row">
+                  <input id="queue-input" class="scan-input" placeholder="Scan / type code" spellcheck="false">
+                  <button class="btn btn-primary" type="submit">Add</button>
+                </div>
+                <details class="paste-box">
+                  <summary>Paste a list of codes</summary>
+                  <textarea id="queue-paste" rows="4" placeholder="One code per line, or separated by commas"></textarea>
+                  <button class="btn" type="button" id="queue-paste-btn">Add all</button>
+                </details>
+              </form>
+              <div class="queue-summary" id="queue-summary"></div>
+              <ol id="queue-list" class="queue-list"></ol>
+              <div class="queue-actions">
+                <button class="btn btn-primary btn-lg" id="queue-next">Work next pending ▶</button>
+                <button class="btn" id="queue-clear-done">Clear finished</button>
+                <button class="btn btn-ghost" id="queue-clear-all">Clear all</button>
+              </div>
+            </aside>
+            <div id="queue-result" class="result-area">
+              <div class="empty-state">Add codes on the left, then press <b>Work next pending</b>.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- LOG ------------------------------------------------------------>
+        <section id="view-log" class="view">
+          <h1 class="page-title">Activity <span class="dim js-date"></span></h1>
+          <div class="card">
+            <div class="card-head">
+              <h2>Turned off right now</h2>
+              <span class="muted">Turn a product back on when a delivery arrives.</span>
+            </div>
+            <div id="turned-off-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2>Activity log</h2>
+              <input id="log-search" class="search" placeholder="Search code, product, result…" spellcheck="false">
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>Time</th><th>Product</th><th>Code</th><th>Result</th><th>Action taken</th><th class="num">Time spent</th></tr></thead>
+                <tbody id="log-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- STATS ---------------------------------------------------------->
+        <section id="view-stats" class="view">
+          <h1 class="page-title"><span class="js-month-name"></span> <span class="dim js-year"></span></h1>
+          <div class="tiles" id="stat-tiles"></div>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <div class="card-label">Checks per hour</div>
+                <div class="card-value" id="chart-total"></div>
+              </div>
+              <div class="legend">
+                <span><i class="swatch swatch-line"></i>Today</span>
+                <span><i class="swatch swatch-dash"></i>Previous 3-day average</span>
+              </div>
+            </div>
+            <div class="chart" id="hour-chart"></div>
+            <details class="table-toggle">
+              <summary>Show as table</summary>
+              <div id="hour-table"></div>
+            </details>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Previous days</h2></div>
+            <div id="day-table" class="table-wrap"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="confirm-dialog" class="dialog">
+    <form method="dialog">
+      <h2 id="confirm-title">Confirm</h2>
+      <p id="confirm-body"></p>
+      <div class="dialog-actions">
+        <button class="btn btn-lg" value="cancel">Cancel <kbd>Esc</kbd></button>
+        <button class="btn btn-danger btn-lg" value="ok" id="confirm-ok">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  
+<script>window.DEMO_SEED = {"products":[{"id":1,"route_code":"RT-45054","inventory_code":"INV-P5T4-6021","brand":"Mug","name":"Mug Root Beer","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":2,"route_code":"RT-46700","inventory_code":"INV-QHAP-6918","brand":"Propel","name":"Propel Berry","pack_size":"24oz Bottle 12ct","is_active":1,"off_time":null},{"id":3,"route_code":"RT-43879","inventory_code":"INV-MZAK-7196","brand":"Pure Leaf","name":"Pure Leaf Sweet Tea","pack_size":"6pk 16.9oz Bottles","is_active":1,"off_time":null},{"id":4,"route_code":"RT-47680","inventory_code":"INV-6VAY-3004","brand":"Mountain Dew","name":"Mountain Dew","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":5,"route_code":"RT-76823","inventory_code":"INV-P3EF-8061","brand":"Pepsi","name":"Pepsi","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":6,"route_code":"RT-60641","inventory_code":"INV-TBUF-1342","brand":"Pepsi","name":"Pepsi Zero Sugar","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":7,"route_code":"RT-12649","inventory_code":"INV-CVQT-0147","brand":"Bubly","name":"Bubly Lime","pack_size":"8pk 12oz Cans","is_active":1,"off_time":null},{"id":8,"route_code":"RT-87420","inventory_code":"INV-BCA6-4810","brand":"Aquafina","name":"Aquafina Water","pack_size":"24pk 16.9oz Bottles","is_active":1,"off_time":null},{"id":9,"route_code":"RT-35578","inventory_code":"INV-QS3A-2971","brand":"Brisk","name":"Brisk Lemon Iced Tea","pack_size":"1L Bottle 12ct","is_active":1,"off_time":null},{"id":10,"route_code":"RT-87922","inventory_code":"INV-8WEH-2682","brand":"Bubly","name":"Bubly Blackberry","pack_size":"8pk 12oz Cans","is_active":1,"off_time":null},{"id":11,"route_code":"RT-31149","inventory_code":"INV-QYEP-8664","brand":"Starry","name":"Starry Lemon Lime","pack_size":"2L Bottle 8ct","is_active":1,"off_time":null},{"id":12,"route_code":"RT-11948","inventory_code":"INV-QVVY-8572","brand":"Pepsi","name":"Pepsi","pack_size":"6pk 16.9oz Bottles","is_active":1,"off_time":null},{"id":13,"route_code":"RT-95569","inventory_code":"INV-93JY-5118","brand":"Starry","name":"Starry Lemon Lime","pack_size":"20oz Bottle 24ct","is_active":0,"off_time":"06:12:40"},{"id":14,"route_code":"RT-14624","inventory_code":"INV-DVGX-7269","brand":"Pepsi","name":"Pepsi Wild Cherry","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":15,"route_code":"RT-66634","inventory_code":"INV-PF6W-8075","brand":"Rockstar","name":"Rockstar Original","pack_size":"16oz Can 12ct","is_active":1,"off_time":null},{"id":16,"route_code":"RT-44687","inventory_code":"INV-MH4F-9144","brand":"Aquafina","name":"Aquafina Water","pack_size":"1L Bottle 15ct","is_active":1,"off_time":null},{"id":17,"route_code":"RT-77095","inventory_code":"INV-QAZ7-0752","brand":"Pepsi","name":"Pepsi Zero Sugar","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":18,"route_code":"RT-92771","inventory_code":"INV-36AE-0914","brand":"Mountain Dew","name":"Mountain Dew","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":19,"route_code":"RT-52428","inventory_code":"INV-URLT-5914","brand":"Starry","name":"Starry Lemon Lime","pack_size":"12pk 12oz Cans","is_active":0,"off_time":"06:21:40"},{"id":20,"route_code":"RT-13131","inventory_code":"INV-GHG4-6546","brand":"Pepsi","name":"Diet Pepsi","pack_size":"2L Bottle 8ct","is_active":1,"off_time":null},{"id":21,"route_code":"RT-90146","inventory_code":"INV-5GSZ-2566","brand":"Pepsi","name":"Diet Pepsi","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":22,"route_code":"RT-94839","inventory_code":"INV-VCQM-4768","brand":"Mountain Dew","name":"Mountain Dew Baja Blast","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":23,"route_code":"RT-20172","inventory_code":"INV-R65J-3369","brand":"Mountain Dew","name":"Diet Mountain Dew","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":24,"route_code":"RT-69838","inventory_code":"INV-QH9H-1845","brand":"Mountain Dew","name":"Mountain Dew","pack_size":"2L Bottle 8ct","is_active":1,"off_time":null},{"id":25,"route_code":"RT-67750","inventory_code":"INV-5DL3-4992","brand":"Pepsi","name":"Diet Pepsi","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":26,"route_code":"RT-97928","inventory_code":"INV-T57E-4346","brand":"Starry","name":"Starry Zero Sugar","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":27,"route_code":"RT-21139","inventory_code":"INV-22UR-9934","brand":"Pepsi","name":"Pepsi","pack_size":"24pk 12oz Cans","is_active":1,"off_time":null},{"id":28,"route_code":"RT-33191","inventory_code":"INV-GHPU-6615","brand":"Mountain Dew","name":"Diet Mountain Dew","pack_size":"2L Bottle 8ct","is_active":1,"off_time":null},{"id":29,"route_code":"RT-89770","inventory_code":"INV-RDQ7-7202","brand":"Pepsi","name":"Diet Pepsi","pack_size":"24pk 12oz Cans","is_active":1,"off_time":null},{"id":30,"route_code":"RT-96911","inventory_code":"INV-VLWC-5323","brand":"Pepsi","name":"Pepsi Wild Cherry","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":31,"route_code":"RT-26818","inventory_code":"INV-465X-9006","brand":"Brisk","name":"Brisk Lemon Iced Tea","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":32,"route_code":"RT-65437","inventory_code":"INV-939P-8086","brand":"Starry","name":"Starry Zero Sugar","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":33,"route_code":"RT-65576","inventory_code":"INV-9TJM-9635","brand":"Pepsi","name":"Pepsi","pack_size":"2L Bottle 8ct","is_active":1,"off_time":null},{"id":34,"route_code":"RT-43824","inventory_code":"INV-WVWW-8118","brand":"Pure Leaf","name":"Pure Leaf Sweet Tea","pack_size":"18.5oz Bottle 12ct","is_active":1,"off_time":null},{"id":35,"route_code":"RT-24777","inventory_code":"INV-QTUZ-9604","brand":"Gatorade","name":"Gatorade Cool Blue","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":36,"route_code":"RT-50352","inventory_code":"INV-XS3B-7319","brand":"Mountain Dew","name":"Mountain Dew","pack_size":"6pk 16.9oz Bottles","is_active":1,"off_time":null},{"id":37,"route_code":"RT-71748","inventory_code":"INV-BTSA-2737","brand":"Gatorade","name":"Gatorade Zero Glacier Freeze","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":38,"route_code":"RT-63194","inventory_code":"INV-3M3A-1529","brand":"Gatorade","name":"Gatorade Fruit Punch","pack_size":"12oz Bottle 24ct","is_active":1,"off_time":null},{"id":39,"route_code":"RT-67676","inventory_code":"INV-WNUF-4888","brand":"Aquafina","name":"Aquafina Water","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":40,"route_code":"RT-23750","inventory_code":"INV-27MJ-5816","brand":"Gatorade","name":"Gatorade Lemon-Lime","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":41,"route_code":"RT-54781","inventory_code":"INV-PTS6-0687","brand":"Bubly","name":"Bubly Grapefruit","pack_size":"8pk 12oz Cans","is_active":1,"off_time":null},{"id":42,"route_code":"RT-22641","inventory_code":"INV-4DVD-7627","brand":"Gatorade","name":"Gatorade Zero Glacier Freeze","pack_size":"28oz Bottle 15ct","is_active":1,"off_time":null},{"id":43,"route_code":"RT-84535","inventory_code":"INV-6A7V-0659","brand":"Mountain Dew","name":"Mountain Dew","pack_size":"24pk 12oz Cans","is_active":1,"off_time":null},{"id":44,"route_code":"RT-40375","inventory_code":"INV-BRQH-7878","brand":"Pepsi","name":"Pepsi Zero Sugar","pack_size":"2L Bottle 8ct","is_active":1,"off_time":null},{"id":45,"route_code":"RT-61522","inventory_code":"INV-48UP-1058","brand":"Mountain Dew","name":"Diet Mountain Dew","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":46,"route_code":"RT-10614","inventory_code":"INV-Y2NN-9821","brand":"Gatorade","name":"Gatorade Cool Blue","pack_size":"12oz Bottle 24ct","is_active":1,"off_time":null},{"id":47,"route_code":"RT-99271","inventory_code":"INV-T2PK-8467","brand":"Mountain Dew","name":"Mountain Dew Baja Blast","pack_size":"12pk 12oz Cans","is_active":1,"off_time":null},{"id":48,"route_code":"RT-94915","inventory_code":"INV-LPHS-2413","brand":"Pepsi","name":"Pepsi","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":49,"route_code":"RT-27461","inventory_code":"INV-K6E6-0985","brand":"Gatorade","name":"Gatorade Fruit Punch","pack_size":"20oz Bottle 24ct","is_active":1,"off_time":null},{"id":50,"route_code":"RT-78844","inventory_code":"INV-3NPZ-6761","brand":"Lipton","name":"Lipton Green Tea Citrus","pack_size":"16.9oz Bottle 12ct","is_active":1,"off_time":null}],"locations":{"P-10-01":"pick","P-10-02":"pick","P-10-03":"pick","P-10-04":"pick","P-10-05":"pick","P-10-06":"pick","P-11-01":"pick","P-11-02":"pick","P-11-03":"pick","P-11-04":"pick","P-11-05":"pick","P-11-06":"pick","P-12-01":"pick","P-12-02":"pick","P-12-03":"pick","P-12-04":"pick","P-12-05":"pick","P-12-06":"pick","P-13-01":"pick","P-13-02":"pick","P-13-03":"pick","P-13-04":"pick","P-13-05":"pick","P-13-06":"pick","P-14-01":"pick","P-14-02":"pick","P-14-03":"pick","P-14-04":"pick","P-14-05":"pick","P-14-06":"pick","P-15-01":"pick","P-15-02":"pick","P-15-03":"pick","P-15-04":"pick","P-15-05":"pick","P-15-06":"pick","P-16-01":"pick","P-16-02":"pick","P-16-03":"pick","P-16-04":"pick","P-16-05":"pick","P-16-06":"pick","P-17-01":"pick","P-17-02":"pick","P-17-03":"pick","P-17-04":"pick","P-17-05":"pick","P-17-06":"pick","P-18-01":"pick","P-18-02":"pick","R-D2-06":"reserve","R-A3-05":"reserve","R-D4-04":"reserve","R-A4-03":"reserve","OF-07":"overflow","R-C2-02":"reserve","R-D1-04":"reserve","OF-01":"overflow","OF-03":"overflow","R-D4-01":"reserve","R-C2-06":"reserve","R-B3-01":"reserve","R-A2-01":"reserve","R-B2-01":"reserve","R-D1-03":"reserve","R-D1-02":"reserve","R-D2-05":"reserve","OF-09":"overflow","R-B2-04":"reserve","OF-08":"overflow","R-C3-05":"reserve","R-C1-04":"reserve","R-B2-06":"reserve","OF-02":"overflow","R-C4-06":"reserve","OF-05":"overflow","R-C1-02":"reserve","R-C1-01":"reserve","R-A3-06":"reserve","R-A4-02":"reserve","R-B4-05":"reserve","R-D3-02":"reserve","R-A2-04":"reserve"},"inventory":[[1,"P-10-01",30],[2,"P-10-02",0],[2,"R-D2-06",75],[2,"OF-02",9],[3,"P-10-03",23],[4,"P-10-04",16],[4,"R-C4-06",32],[5,"P-10-05",0],[5,"R-D3-02",64],[5,"OF-07",7],[6,"P-10-06",23],[7,"P-11-01",8],[7,"R-B2-01",108],[8,"P-11-02",27],[9,"P-11-03",0],[9,"R-A2-04",42],[10,"P-11-04",20],[10,"R-B2-04",51],[11,"P-11-05",23],[12,"P-11-06",6],[12,"R-A3-05",53],[13,"P-12-01",0],[14,"P-12-02",36],[15,"P-12-03",29],[16,"P-12-04",27],[17,"P-12-05",28],[17,"R-A2-01",119],[18,"P-12-06",8],[19,"P-13-01",0],[20,"P-13-02",19],[20,"R-D1-02",88],[21,"P-13-03",37],[21,"R-C1-04",109],[22,"P-13-04",0],[22,"R-C2-02",78],[23,"P-13-05",0],[24,"P-13-06",10],[24,"R-D2-05",93],[25,"P-14-01",0],[26,"P-14-02",20],[26,"R-B4-05",51],[27,"P-14-03",26],[28,"P-14-04",37],[28,"R-D4-01",78],[29,"P-14-05",0],[29,"R-A3-06",66],[29,"OF-09",33],[30,"P-14-06",0],[30,"R-B3-01",87],[30,"OF-01",33],[31,"P-15-01",8],[32,"P-15-02",27],[32,"R-C1-02",85],[33,"P-15-03",0],[33,"R-D1-03",36],[33,"OF-05",19],[34,"P-15-04",12],[35,"P-15-05",0],[35,"R-C2-06",58],[35,"OF-08",12],[36,"P-15-06",0],[37,"P-16-01",0],[37,"R-A4-02",31],[38,"P-16-02",0],[38,"R-D1-04",38],[38,"OF-03",39],[39,"P-16-03",33],[40,"P-16-04",0],[40,"R-D4-04",34],[41,"P-16-05",0],[42,"P-16-06",33],[42,"R-C3-05",20],[43,"P-17-01",0],[44,"P-17-02",12],[44,"R-B2-06",108],[45,"P-17-03",0],[45,"R-C1-01",25],[46,"P-17-04",22],[46,"R-A4-03",92],[47,"P-17-05",7],[48,"P-17-06",0],[49,"P-18-01",19],[50,"P-18-02",4]],"routes":[{"id":1,"route_number":"407","truck_type":"Route","truck_number":"T-313","destination":"Walker / Standale","depart_day":1,"depart_time":"03:45:00"},{"id":2,"route_number":"414","truck_type":"Route","truck_number":"T-212","destination":"Grandville / Jenison","depart_day":1,"depart_time":"04:10:00"},{"id":3,"route_number":"421","truck_type":"Route","truck_number":"T-246","destination":"Wyoming / Kentwood","depart_day":1,"depart_time":"04:20:00"},{"id":4,"route_number":"428","truck_type":"Route","truck_number":"T-163","destination":"Holland","depart_day":1,"depart_time":"04:40:00"},{"id":5,"route_number":"435","truck_type":"Bulk","truck_number":"T-281","destination":"Zeeland / Hudsonville","depart_day":1,"depart_time":"04:50:00"},{"id":6,"route_number":"442","truck_type":"Route","truck_number":"T-341","destination":"Muskegon","depart_day":1,"depart_time":"05:05:00"},{"id":7,"route_number":"449","truck_type":"Route","truck_number":"T-253","destination":"Grand Haven / Spring Lake","depart_day":1,"depart_time":"05:15:00"},{"id":8,"route_number":"456","truck_type":"Route","truck_number":"T-218","destination":"Rockford / Cedar Springs","depart_day":1,"depart_time":"05:35:00"},{"id":9,"route_number":"463","truck_type":"Route","truck_number":"T-230","destination":"Allendale / Coopersville","depart_day":1,"depart_time":"05:55:00"},{"id":10,"route_number":"470","truck_type":"Bulk","truck_number":"T-267","destination":"Lowell / Ada","depart_day":1,"depart_time":"06:10:00"},{"id":11,"route_number":"477","truck_type":"Route","truck_number":"T-228","destination":"Caledonia / Byron Center","depart_day":1,"depart_time":"06:25:00"},{"id":12,"route_number":"484","truck_type":"Route","truck_number":"T-265","destination":"Greenville","depart_day":1,"depart_time":"06:40:00"},{"id":13,"route_number":"491","truck_type":"Route","truck_number":"T-210","destination":"Ionia","depart_day":1,"depart_time":"06:45:00"},{"id":14,"route_number":"498","truck_type":"Route","truck_number":"T-203","destination":"Big Rapids","depart_day":1,"depart_time":"07:05:00"},{"id":15,"route_number":"505","truck_type":"Transport","truck_number":"T-260","destination":"Lansing DC (transfer)","depart_day":1,"depart_time":"07:15:00"},{"id":16,"route_number":"512","truck_type":"Transport","truck_number":"T-320","destination":"Kalamazoo DC (transfer)","depart_day":1,"depart_time":"07:30:00"},{"id":17,"route_number":"519","truck_type":"Route","truck_number":"T-240","destination":"Downtown Grand Rapids","depart_day":1,"depart_time":"07:55:00"},{"id":18,"route_number":"526","truck_type":"Route","truck_number":"T-397","destination":"Cascade / Forest Hills","depart_day":1,"depart_time":"08:05:00"}],"route_items":[[2,15,24],[5,15,38],[3,3,59],[16,3,16],[10,3,2],[9,3,18],[6,3,39],[13,3,17],[9,32,35],[16,12,29],[15,12,36],[17,12,17],[8,12,2],[14,12,45],[7,1,47],[3,1,35],[6,1,39],[13,1,33],[17,1,18],[1,10,11],[16,10,57],[11,10,19],[9,10,9],[16,31,14],[17,6,46],[11,6,16],[10,6,58],[3,8,48],[7,8,59],[2,8,5],[15,8,18],[6,47,8],[8,17,19],[3,27,51],[12,4,31],[9,4,53],[16,4,38],[15,4,4],[13,44,16],[6,44,36],[15,44,23],[14,44,39],[10,44,26],[18,44,58],[1,26,6],[14,26,52],[16,26,51],[9,46,4],[2,18,12],[4,18,46],[6,7,37],[3,7,10],[5,7,40],[10,7,55],[16,7,44],[4,34,45],[13,34,44],[1,34,33],[10,34,40],[15,21,3],[10,24,11],[15,24,36],[13,24,55],[8,16,18],[18,16,8],[2,20,26],[4,20,16],[1,20,31],[17,20,9],[11,20,37],[13,20,7],[6,14,29],[13,28,48],[14,28,44],[3,28,16],[6,42,17],[7,42,27],[18,42,44],[12,42,16],[1,42,26],[13,42,42],[8,50,19],[2,50,31],[1,50,29],[13,50,35],[18,50,8],[14,49,60],[18,49,25],[9,49,41],[3,49,50],[5,49,58],[18,39,54],[16,11,29],[2,2,29],[10,2,53],[16,2,12],[15,2,38],[7,33,25],[9,33,34],[13,33,39],[1,33,41],[16,33,25],[1,40,36],[4,40,48],[12,5,32],[10,9,38],[13,9,43],[12,9,52],[16,9,4],[1,9,45],[6,38,19],[17,38,8],[10,37,29],[3,37,24],[10,45,31],[9,45,48],[5,45,52],[8,45,7],[11,45,15],[14,45,39],[17,29,37],[8,30,44],[11,30,21],[7,35,18],[1,35,15],[14,35,28],[4,22,16],[15,41,8],[10,41,36],[7,41,17],[6,41,16],[1,41,38],[8,19,33],[9,19,46],[10,23,4],[16,23,60],[16,36,34],[9,36,16],[15,36,24],[14,43,47],[9,43,21],[7,43,40],[18,43,12],[17,43,4],[15,43,39],[9,25,8],[14,25,5],[1,25,18],[7,48,54],[14,48,22],[2,48,20],[18,48,4],[15,48,38],[16,48,6],[5,13,17],[15,13,37],[9,13,2]],"checks":[{"day":-3,"start":"06:00:37","seconds":52,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-3,"start":"06:01:09","seconds":45,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"06:01:17","seconds":108,"code":"RT-77095","product_id":17,"result":"IN STOCK","action":"Sent picker to R-A2-01"},{"day":-3,"start":"06:01:20","seconds":85,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-3,"start":"06:01:39","seconds":90,"code":"RT-95569","product_id":13,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"06:06:31","seconds":93,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"06:13:34","seconds":162,"code":"RT-20172","product_id":23,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"06:13:49","seconds":43,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":-3,"start":"06:15:37","seconds":48,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-3,"start":"06:20:34","seconds":68,"code":"RT-44687","product_id":16,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"06:21:36","seconds":100,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-3,"start":"06:23:38","seconds":65,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-3,"start":"06:27:21","seconds":76,"code":"RT-11948","product_id":12,"result":"IN STOCK","action":"Sent picker to R-A3-05"},{"day":-3,"start":"06:28:45","seconds":51,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-3,"start":"06:29:28","seconds":107,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"06:32:48","seconds":93,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"06:35:04","seconds":68,"code":"RT-27461","product_id":49,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"06:35:47","seconds":70,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"06:36:14","seconds":47,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-3,"start":"06:40:50","seconds":83,"code":"RT-12649","product_id":7,"result":"IN STOCK","action":"Sent picker to R-B2-01"},{"day":-3,"start":"06:43:54","seconds":87,"code":"RT-67750","product_id":25,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"06:48:36","seconds":68,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-3,"start":"06:50:47","seconds":92,"code":"RT-13131","product_id":20,"result":"IN STOCK","action":"Sent picker to R-D1-02"},{"day":-3,"start":"06:53:46","seconds":46,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":-3,"start":"06:55:51","seconds":67,"code":"RT-97928","product_id":26,"result":"IN STOCK","action":"Sent picker to R-B4-05"},{"day":-3,"start":"06:56:17","seconds":43,"code":"RT-22641","product_id":42,"result":"IN STOCK","action":"Sent picker to R-C3-05"},{"day":-3,"start":"06:57:26","seconds":106,"code":"RT-99271","product_id":47,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"06:57:57","seconds":101,"code":"RT-66634","product_id":15,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"06:58:27","seconds":113,"code":"RT-87420","product_id":8,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"06:59:02","seconds":101,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-3,"start":"07:02:35","seconds":85,"code":"RT-47680","product_id":4,"result":"IN STOCK","action":"Sent picker to R-C4-06"},{"day":-3,"start":"07:03:39","seconds":165,"code":"RT-67750","product_id":25,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"07:10:44","seconds":155,"code":"RT-54781","product_id":41,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"07:17:08","seconds":70,"code":"RT-87420","product_id":8,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"07:21:53","seconds":108,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-3,"start":"07:28:24","seconds":51,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-3,"start":"07:32:49","seconds":78,"code":"RT-40375","product_id":44,"result":"IN STOCK","action":"Sent picker to R-B2-06"},{"day":-3,"start":"07:36:29","seconds":162,"code":"RT-67750","product_id":25,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"07:37:48","seconds":72,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":-3,"start":"07:38:52","seconds":82,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-3,"start":"07:45:14","seconds":180,"code":"RT-50352","product_id":36,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"07:45:37","seconds":111,"code":"RT-20172","product_id":23,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"07:47:18","seconds":53,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"07:50:33","seconds":108,"code":"RT-87922","product_id":10,"result":"IN STOCK","action":"Sent picker to R-B2-04"},{"day":-3,"start":"07:51:18","seconds":85,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"07:53:39","seconds":66,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-3,"start":"07:56:02","seconds":168,"code":"RT-52428","product_id":19,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"07:56:54","seconds":58,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"08:04:51","seconds":52,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-3,"start":"08:08:27","seconds":86,"code":"RT-47680","product_id":4,"result":"IN STOCK","action":"Sent picker to R-C4-06"},{"day":-3,"start":"08:24:54","seconds":56,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-3,"start":"08:25:18","seconds":64,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":-3,"start":"08:29:10","seconds":53,"code":"RT-99271","product_id":47,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-3,"start":"08:42:47","seconds":82,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-3,"start":"08:45:44","seconds":147,"code":"RT-50352","product_id":36,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"09:13:23","seconds":126,"code":"RT-84535","product_id":43,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"09:28:47","seconds":38,"code":"RT-97928","product_id":26,"result":"IN STOCK","action":"Sent picker to R-B4-05"},{"day":-3,"start":"09:45:09","seconds":121,"code":"RT-94915","product_id":48,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"10:26:21","seconds":89,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"10:39:45","seconds":36,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":-3,"start":"11:02:51","seconds":84,"code":"RT-33191","product_id":28,"result":"IN STOCK","action":"Sent picker to R-D4-01"},{"day":-3,"start":"11:16:22","seconds":108,"code":"RT-94915","product_id":48,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"11:58:18","seconds":57,"code":"RT-90146","product_id":21,"result":"IN STOCK","action":"Sent picker to R-C1-04"},{"day":-3,"start":"12:00:26","seconds":58,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":-3,"start":"12:07:41","seconds":40,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"12:52:13","seconds":92,"code":"RT-52428","product_id":19,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-3,"start":"13:11:39","seconds":83,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-3,"start":"14:11:59","seconds":42,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-3,"start":"16:18:03","seconds":43,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-2,"start":"06:02:23","seconds":62,"code":"RT-11948","product_id":12,"result":"IN STOCK","action":"Sent picker to R-A3-05"},{"day":-2,"start":"06:04:08","seconds":108,"code":"RT-40375","product_id":44,"result":"IN STOCK","action":"Sent picker to R-B2-06"},{"day":-2,"start":"06:05:41","seconds":115,"code":"RT-77095","product_id":17,"result":"IN STOCK","action":"Sent picker to R-A2-01"},{"day":-2,"start":"06:05:43","seconds":127,"code":"RT-54781","product_id":41,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"06:10:26","seconds":52,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:10:44","seconds":110,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-2,"start":"06:11:07","seconds":63,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-2,"start":"06:12:19","seconds":60,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-2,"start":"06:15:56","seconds":63,"code":"RT-97928","product_id":26,"result":"IN STOCK","action":"Sent picker to R-B4-05"},{"day":-2,"start":"06:15:59","seconds":80,"code":"RT-92771","product_id":18,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:17:15","seconds":105,"code":"RT-21139","product_id":27,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:17:27","seconds":43,"code":"RT-21139","product_id":27,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:20:53","seconds":95,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-2,"start":"06:21:29","seconds":56,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-2,"start":"06:22:12","seconds":111,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-2,"start":"06:22:25","seconds":180,"code":"RT-84535","product_id":43,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"06:27:27","seconds":111,"code":"RT-67750","product_id":25,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"06:29:10","seconds":102,"code":"RT-66634","product_id":15,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:30:13","seconds":66,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-2,"start":"06:30:58","seconds":108,"code":"RT-92771","product_id":18,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:32:24","seconds":88,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-2,"start":"06:38:04","seconds":46,"code":"RT-13131","product_id":20,"result":"IN STOCK","action":"Sent picker to R-D1-02"},{"day":-2,"start":"06:40:58","seconds":86,"code":"RT-22641","product_id":42,"result":"IN STOCK","action":"Sent picker to R-C3-05"},{"day":-2,"start":"06:47:15","seconds":51,"code":"RT-43879","product_id":3,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"06:49:04","seconds":55,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-2,"start":"06:51:16","seconds":113,"code":"RT-11948","product_id":12,"result":"IN STOCK","action":"Sent picker to R-A3-05"},{"day":-2,"start":"06:52:10","seconds":43,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":-2,"start":"06:57:12","seconds":80,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-2,"start":"06:58:29","seconds":71,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-2,"start":"06:59:09","seconds":108,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-2,"start":"07:01:54","seconds":172,"code":"RT-67750","product_id":25,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"07:02:39","seconds":73,"code":"RT-92771","product_id":18,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"07:03:59","seconds":82,"code":"RT-33191","product_id":28,"result":"IN STOCK","action":"Sent picker to R-D4-01"},{"day":-2,"start":"07:16:30","seconds":51,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-2,"start":"07:17:03","seconds":115,"code":"RT-47680","product_id":4,"result":"IN STOCK","action":"Sent picker to R-C4-06"},{"day":-2,"start":"07:21:02","seconds":47,"code":"RT-33191","product_id":28,"result":"IN STOCK","action":"Sent picker to R-D4-01"},{"day":-2,"start":"07:22:11","seconds":63,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-2,"start":"07:23:19","seconds":43,"code":"RT-66634","product_id":15,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"07:23:27","seconds":53,"code":"RT-31149","product_id":11,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"07:25:38","seconds":96,"code":"RT-21139","product_id":27,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"07:28:09","seconds":63,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-2,"start":"07:31:31","seconds":50,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-2,"start":"07:33:12","seconds":113,"code":"RT-33191","product_id":28,"result":"IN STOCK","action":"Sent picker to R-D4-01"},{"day":-2,"start":"07:33:28","seconds":62,"code":"RT-65437","product_id":32,"result":"IN STOCK","action":"Sent picker to R-C1-02"},{"day":-2,"start":"07:38:22","seconds":51,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-2,"start":"07:50:52","seconds":113,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-2,"start":"07:52:50","seconds":88,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":-2,"start":"07:53:15","seconds":95,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-2,"start":"07:55:31","seconds":170,"code":"RT-52428","product_id":19,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"08:23:59","seconds":89,"code":"RT-33191","product_id":28,"result":"IN STOCK","action":"Sent picker to R-D4-01"},{"day":-2,"start":"08:25:26","seconds":43,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-2,"start":"08:34:57","seconds":66,"code":"RT-43824","product_id":34,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"08:40:14","seconds":86,"code":"RT-99271","product_id":47,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"08:47:10","seconds":41,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-2,"start":"08:57:49","seconds":66,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"09:07:16","seconds":67,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-2,"start":"09:24:53","seconds":143,"code":"RT-95569","product_id":13,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"09:25:51","seconds":44,"code":"RT-43824","product_id":34,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"09:30:20","seconds":82,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-2,"start":"09:50:34","seconds":77,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-2,"start":"10:09:48","seconds":73,"code":"RT-87420","product_id":8,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"10:20:31","seconds":73,"code":"RT-20172","product_id":23,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"10:35:53","seconds":45,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-2,"start":"10:57:16","seconds":41,"code":"RT-90146","product_id":21,"result":"IN STOCK","action":"Sent picker to R-C1-04"},{"day":-2,"start":"11:55:32","seconds":44,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":-2,"start":"12:12:28","seconds":88,"code":"RT-10614","product_id":46,"result":"IN STOCK","action":"Sent picker to R-A4-03"},{"day":-2,"start":"12:42:10","seconds":53,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-2,"start":"13:08:19","seconds":35,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-2,"start":"14:26:17","seconds":78,"code":"RT-45054","product_id":1,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-2,"start":"14:37:29","seconds":61,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-2,"start":"14:45:06","seconds":42,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-2,"start":"16:31:52","seconds":149,"code":"RT-20172","product_id":23,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-2,"start":"16:37:56","seconds":39,"code":"RT-40375","product_id":44,"result":"IN STOCK","action":"Sent picker to R-B2-06"},{"day":-1,"start":"06:03:06","seconds":111,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"06:03:44","seconds":108,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-1,"start":"06:04:07","seconds":48,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"06:05:36","seconds":83,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-1,"start":"06:08:21","seconds":57,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-1,"start":"06:08:34","seconds":117,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-1,"start":"06:12:03","seconds":117,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-1,"start":"06:13:45","seconds":50,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-1,"start":"06:17:41","seconds":66,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-1,"start":"06:18:29","seconds":101,"code":"RT-87922","product_id":10,"result":"IN STOCK","action":"Sent picker to R-B2-04"},{"day":-1,"start":"06:19:19","seconds":103,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-1,"start":"06:20:04","seconds":95,"code":"RT-26818","product_id":31,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"06:21:34","seconds":52,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":-1,"start":"06:24:35","seconds":56,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-1,"start":"06:24:44","seconds":107,"code":"RT-43824","product_id":34,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"06:25:19","seconds":103,"code":"RT-97928","product_id":26,"result":"IN STOCK","action":"Sent picker to R-B4-05"},{"day":-1,"start":"06:27:09","seconds":72,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"06:28:41","seconds":103,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-1,"start":"06:29:32","seconds":80,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-1,"start":"06:30:15","seconds":108,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-1,"start":"06:31:03","seconds":63,"code":"RT-22641","product_id":42,"result":"IN STOCK","action":"Sent picker to R-C3-05"},{"day":-1,"start":"06:32:20","seconds":81,"code":"RT-10614","product_id":46,"result":"IN STOCK","action":"Sent picker to R-A4-03"},{"day":-1,"start":"06:33:28","seconds":87,"code":"RT-45054","product_id":1,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"06:34:02","seconds":83,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-1,"start":"06:34:40","seconds":67,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":-1,"start":"06:38:20","seconds":66,"code":"RT-31149","product_id":11,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"06:40:04","seconds":112,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-1,"start":"06:42:25","seconds":47,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-1,"start":"06:43:07","seconds":78,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-1,"start":"06:45:49","seconds":67,"code":"RT-22641","product_id":42,"result":"IN STOCK","action":"Sent picker to R-C3-05"},{"day":-1,"start":"06:49:44","seconds":102,"code":"RT-77095","product_id":17,"result":"IN STOCK","action":"Sent picker to R-A2-01"},{"day":-1,"start":"06:51:38","seconds":77,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"06:53:44","seconds":93,"code":"RT-65437","product_id":32,"result":"IN STOCK","action":"Sent picker to R-C1-02"},{"day":-1,"start":"06:57:45","seconds":110,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"06:58:29","seconds":101,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":-1,"start":"07:01:34","seconds":90,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-1,"start":"07:07:16","seconds":78,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"07:09:23","seconds":97,"code":"RT-50352","product_id":36,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-1,"start":"07:19:25","seconds":120,"code":"RT-95569","product_id":13,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-1,"start":"07:22:48","seconds":71,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-1,"start":"07:23:48","seconds":77,"code":"RT-90146","product_id":21,"result":"IN STOCK","action":"Sent picker to R-C1-04"},{"day":-1,"start":"07:25:07","seconds":96,"code":"RT-90146","product_id":21,"result":"IN STOCK","action":"Sent picker to R-C1-04"},{"day":-1,"start":"07:25:34","seconds":43,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-1,"start":"07:27:16","seconds":87,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":-1,"start":"07:30:53","seconds":147,"code":"RT-50352","product_id":36,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-1,"start":"07:32:25","seconds":156,"code":"RT-20172","product_id":23,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-1,"start":"07:33:01","seconds":77,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-1,"start":"07:33:56","seconds":62,"code":"RT-77095","product_id":17,"result":"IN STOCK","action":"Sent picker to R-A2-01"},{"day":-1,"start":"07:35:23","seconds":105,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-1,"start":"07:38:33","seconds":111,"code":"RT-66634","product_id":15,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"07:40:14","seconds":95,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-1,"start":"07:46:55","seconds":61,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":-1,"start":"07:47:22","seconds":62,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-1,"start":"07:57:10","seconds":53,"code":"RT-65437","product_id":32,"result":"IN STOCK","action":"Sent picker to R-C1-02"},{"day":-1,"start":"07:57:48","seconds":83,"code":"RT-10614","product_id":46,"result":"IN STOCK","action":"Sent picker to R-A4-03"},{"day":-1,"start":"07:59:13","seconds":102,"code":"RT-13131","product_id":20,"result":"IN STOCK","action":"Sent picker to R-D1-02"},{"day":-1,"start":"08:08:38","seconds":61,"code":"RT-13131","product_id":20,"result":"IN STOCK","action":"Sent picker to R-D1-02"},{"day":-1,"start":"08:23:36","seconds":64,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-1,"start":"08:42:02","seconds":136,"code":"RT-94915","product_id":48,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-1,"start":"08:50:07","seconds":51,"code":"RT-47680","product_id":4,"result":"IN STOCK","action":"Sent picker to R-C4-06"},{"day":-1,"start":"08:50:34","seconds":35,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":-1,"start":"08:55:53","seconds":83,"code":"RT-12649","product_id":7,"result":"IN STOCK","action":"Sent picker to R-B2-01"},{"day":-1,"start":"09:04:02","seconds":36,"code":"RT-92771","product_id":18,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"09:24:28","seconds":52,"code":"RT-21139","product_id":27,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"09:33:09","seconds":95,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-1,"start":"09:40:15","seconds":56,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":-1,"start":"09:52:04","seconds":69,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-1,"start":"10:53:54","seconds":68,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":-1,"start":"10:55:21","seconds":45,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":-1,"start":"10:55:45","seconds":70,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"10:59:52","seconds":47,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":-1,"start":"11:44:12","seconds":93,"code":"RT-10614","product_id":46,"result":"IN STOCK","action":"Sent picker to R-A4-03"},{"day":-1,"start":"12:05:27","seconds":87,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"12:32:34","seconds":62,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":-1,"start":"13:33:09","seconds":90,"code":"RT-26818","product_id":31,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"13:47:57","seconds":38,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":-1,"start":"14:06:58","seconds":89,"code":"RT-44687","product_id":16,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":-1,"start":"14:17:30","seconds":84,"code":"RT-84535","product_id":43,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":-1,"start":"15:39:20","seconds":56,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":-1,"start":"15:51:49","seconds":64,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":0,"start":"06:02:03","seconds":111,"code":"RT-27461","product_id":49,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"06:02:36","seconds":85,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":0,"start":"06:04:26","seconds":47,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":0,"start":"06:12:00","seconds":172,"code":"RT-95569","product_id":13,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":0,"start":"06:14:24","seconds":90,"code":"RT-12649","product_id":7,"result":"IN STOCK","action":"Sent picker to R-B2-01"},{"day":0,"start":"06:15:54","seconds":46,"code":"RT-87420","product_id":8,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"06:16:14","seconds":106,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":0,"start":"06:16:49","seconds":105,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"06:17:31","seconds":70,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":0,"start":"06:18:54","seconds":95,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":0,"start":"06:20:21","seconds":78,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":0,"start":"06:21:00","seconds":171,"code":"RT-52428","product_id":19,"result":"OUT OF STOCK","action":"Turned off + EMPTY SLOT confirmed"},{"day":0,"start":"06:22:12","seconds":118,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"06:22:14","seconds":71,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":0,"start":"06:22:45","seconds":68,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":0,"start":"06:24:09","seconds":78,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":0,"start":"06:24:55","seconds":61,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"06:30:20","seconds":75,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"06:30:39","seconds":56,"code":"RT-76823","product_id":5,"result":"IN STOCK","action":"Sent picker to R-D3-02"},{"day":0,"start":"06:30:47","seconds":113,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":0,"start":"06:36:47","seconds":87,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":0,"start":"06:38:25","seconds":68,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":0,"start":"06:39:17","seconds":53,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"06:42:22","seconds":46,"code":"RT-47680","product_id":4,"result":"IN STOCK","action":"Sent picker to R-C4-06"},{"day":0,"start":"06:51:42","seconds":47,"code":"RT-43824","product_id":34,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"06:51:49","seconds":53,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":0,"start":"06:52:06","seconds":116,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":0,"start":"06:52:40","seconds":91,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":0,"start":"06:54:59","seconds":48,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"06:55:09","seconds":62,"code":"RT-10614","product_id":46,"result":"IN STOCK","action":"Sent picker to R-A4-03"},{"day":0,"start":"06:55:13","seconds":92,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":0,"start":"06:56:13","seconds":60,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":0,"start":"06:59:22","seconds":101,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"06:59:46","seconds":110,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":0,"start":"07:09:56","seconds":61,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"07:10:07","seconds":107,"code":"RT-22641","product_id":42,"result":"IN STOCK","action":"Sent picker to R-C3-05"},{"day":0,"start":"07:11:10","seconds":93,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"07:11:28","seconds":117,"code":"RT-65576","product_id":33,"result":"IN STOCK","action":"Sent picker to R-D1-03"},{"day":0,"start":"07:12:51","seconds":118,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":0,"start":"07:24:13","seconds":93,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"07:24:23","seconds":93,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":0,"start":"07:24:38","seconds":106,"code":"RT-21139","product_id":27,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"07:26:30","seconds":78,"code":"RT-13131","product_id":20,"result":"IN STOCK","action":"Sent picker to R-D1-02"},{"day":0,"start":"07:29:10","seconds":76,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"07:32:24","seconds":57,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":0,"start":"07:35:12","seconds":56,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":0,"start":"07:35:46","seconds":110,"code":"RT-23750","product_id":40,"result":"IN STOCK","action":"Sent picker to R-D4-04"},{"day":0,"start":"07:35:53","seconds":113,"code":"RT-10614","product_id":46,"result":"IN STOCK","action":"Sent picker to R-A4-03"},{"day":0,"start":"07:38:57","seconds":111,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"07:41:46","seconds":106,"code":"RT-24777","product_id":35,"result":"IN STOCK","action":"Sent picker to R-C2-06"},{"day":0,"start":"07:52:06","seconds":61,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":0,"start":"08:07:28","seconds":44,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"08:31:22","seconds":69,"code":"RT-11948","product_id":12,"result":"IN STOCK","action":"Sent picker to R-A3-05"},{"day":0,"start":"08:35:53","seconds":66,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"08:47:34","seconds":76,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"08:49:05","seconds":93,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"08:54:22","seconds":80,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"08:57:15","seconds":77,"code":"RT-89770","product_id":29,"result":"IN STOCK","action":"Sent picker to R-A3-06"},{"day":0,"start":"09:21:51","seconds":72,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"09:54:59","seconds":53,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"09:57:49","seconds":66,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":0,"start":"09:58:16","seconds":60,"code":"RT-35578","product_id":9,"result":"IN STOCK","action":"Sent picker to R-A2-04"},{"day":0,"start":"10:30:01","seconds":58,"code":"RT-43879","product_id":3,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"10:41:14","seconds":46,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"11:38:15","seconds":52,"code":"RT-47680","product_id":4,"result":"IN STOCK","action":"Sent picker to R-C4-06"},{"day":0,"start":"11:48:33","seconds":81,"code":"RT-96911","product_id":30,"result":"IN STOCK","action":"Sent picker to R-B3-01"},{"day":0,"start":"12:01:28","seconds":65,"code":"RT-77095","product_id":17,"result":"IN STOCK","action":"Sent picker to R-A2-01"},{"day":0,"start":"12:05:55","seconds":78,"code":"RT-94839","product_id":22,"result":"IN STOCK","action":"Sent picker to R-C2-02"},{"day":0,"start":"12:07:53","seconds":46,"code":"RT-61522","product_id":45,"result":"IN STOCK","action":"Sent picker to R-C1-01"},{"day":0,"start":"12:24:10","seconds":69,"code":"RT-67676","product_id":39,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"13:22:32","seconds":68,"code":"RT-46700","product_id":2,"result":"IN STOCK","action":"Sent picker to R-D2-06"},{"day":0,"start":"14:05:57","seconds":79,"code":"RT-31149","product_id":11,"result":"IN STOCK","action":"Sent picker to pick slot"},{"day":0,"start":"14:51:37","seconds":47,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"14:57:13","seconds":47,"code":"RT-71748","product_id":37,"result":"IN STOCK","action":"Sent picker to R-A4-02"},{"day":0,"start":"15:54:31","seconds":79,"code":"RT-63194","product_id":38,"result":"IN STOCK","action":"Sent picker to R-D1-04"},{"day":0,"start":"16:50:40","seconds":50,"code":"RT-27461","product_id":49,"result":"IN STOCK","action":"Sent picker to pick slot"}],"shift_start":6,"shift_end":16,"history_days":3,"version":"d3977000c6"};</script>
+<script>/*
+ * Browser-only stand-in for server.py + data/repository.py, used by the
+ * shareable web demo. Same API paths, same answers, but the data lives in
+ * this browser (localStorage) instead of SQLite.
+ *
+ * window.DEMO_SEED is the mock data exported by build_demo.py.
+ */
+(function () {
+  const SEED = window.DEMO_SEED;
+  const KEY = 'stockcheck-demo';
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const parse = (s) => new Date(s.replace(' ', 'T'));
+  const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
+  const dayKey = (d) => fmt(d).slice(0, 10);
+
+  // A seed time is "N days from today at HH:MM:SS"; rebase it onto the viewer's calendar.
+  function at(dayOffset, time) {
+    const d = todayStart();
+    d.setDate(d.getDate() + dayOffset);
+    const [h, m, s] = time.split(':').map(Number);
+    d.setHours(h, m, s, 0);
+    return d;
+  }
+
+  // ------------------------------------------------------------------ state
+  function fresh() {
+    const now = new Date();
+    const notFuture = (d) => (d > now ? new Date(Math.max(todayStart(), now - 15 * 60000)) : d);
+    const checks = SEED.checks
+      .map((c) => ({ ...c, startDate: at(c.day, c.start) }))
+      .filter((c) => c.startDate <= now)
+      .map((c, i) => ({
+        id: i + 1,
+        started_at: fmt(c.startDate),
+        completed_at: fmt(new Date(+c.startDate + c.seconds * 1000)),
+        seconds: c.seconds,
+        code_entered: c.code,
+        product_id: c.product_id,
+        result: c.result,
+        action: c.action,
+        queue_item_id: null,
+      }));
+    return {
+      version: SEED.version,
+      day: dayKey(now),
+      products: SEED.products.map((p) => ({
+        id: p.id, route_code: p.route_code, inventory_code: p.inventory_code,
+        brand: p.brand, name: p.name, pack_size: p.pack_size, is_active: p.is_active,
+        turned_off_at: p.off_time ? fmt(notFuture(at(0, p.off_time))) : null,
+      })),
+      locations: SEED.locations,
+      inventory: SEED.inventory.map(([product_id, location_id, quantity]) => ({ product_id, location_id, quantity })),
+      routes: SEED.routes.map((r) => ({ ...r, departs_at: fmt(at(r.depart_day, r.depart_time)) })),
+      route_items: SEED.route_items.map(([route_id, product_id, cases]) => ({ route_id, product_id, cases })),
+      checks,
+      queue: [],
+      nextCheckId: checks.length + 1,
+      nextQueueId: 1,
+      welcomed: false,
+    };
+  }
+
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY));
+      // A new day (or a new build of the demo) starts from fresh sample data.
+      if (s && s.version === SEED.version && s.day === dayKey(new Date())) return s;
+    } catch (_) { /* storage blocked: run from memory */ }
+    return fresh();
+  }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (_) { /* fine: memory only */ }
+  }
+
+  let state = load();
+  const nowStr = () => fmt(new Date());
+  const productById = (id) => state.products.find((p) => p.id === id);
+
+  // ------------------------------------------------------------------ lookup
+  function normalize(code) {
+    code = (code || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (/^\d{5}$/.test(code)) code = 'RT-' + code;
+    return code;
+  }
+
+  // Step 1: the route program knows products by route code (inventory code also accepted).
+  function findInRouteProgram(code) {
+    return state.products.find((p) => p.route_code === code) || state.products.find((p) => p.inventory_code === code);
+  }
+
+  const TYPE_ORDER = { pick: 0, reserve: 1, overflow: 2 };
+
+  function lookup(raw) {
+    const code = normalize(raw);
+    const product = findInRouteProgram(code);
+    if (!product) return { code, outcome: 'NOT_FOUND' };
+
+    // Step 2: translate to the inventory system's code. Step 3: find stock by that code.
+    const inventory_code = product.inventory_code;
+    const owner = state.products.find((p) => p.inventory_code === inventory_code);
+    const stock = state.inventory
+      .filter((i) => i.product_id === owner.id)
+      .map((i) => ({ location_id: i.location_id, type: state.locations[i.location_id], quantity: i.quantity }))
+      .sort((a, b) => TYPE_ORDER[a.type] - TYPE_ORDER[b.type] || b.quantity - a.quantity);
+    const routes = state.route_items
+      .filter((ri) => ri.product_id === product.id)
+      .map((ri) => {
+        const r = state.routes.find((x) => x.id === ri.route_id);
+        return { route_number: r.route_number, truck_type: r.truck_type, truck_number: r.truck_number, destination: r.destination, departs_at: r.departs_at, cases: ri.cases };
+      })
+      .sort((a, b) => (a.departs_at < b.departs_at ? -1 : 1));
+
+    const elsewhere = stock.filter((s) => s.type !== 'pick' && s.quantity > 0);
+    const pick_slot = stock.find((s) => s.type === 'pick') || null;
+    const total = stock.reduce((n, s) => n + s.quantity, 0);
+    const outcome = !product.is_active ? 'ALREADY_OFF' : total > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK';
+    const send_to = elsewhere.length ? elsewhere : (pick_slot && pick_slot.quantity > 0 ? [pick_slot] : []);
+
+    return { code, outcome, product: { ...product }, inventory_code, routes, stock, send_to, pick_slot, total_cases: total };
+  }
+
+  // ------------------------------------------------------------------ log & actions
+  const RESULT_LABELS = { IN_STOCK: 'IN STOCK', OUT_OF_STOCK: 'OUT OF STOCK', NOT_FOUND: 'NOT FOUND', ALREADY_OFF: 'ALREADY OFF' };
+  const QUEUE_STATUS = { IN_STOCK: 'in_stock', OUT_OF_STOCK: 'out_of_stock', NOT_FOUND: 'not_found', ALREADY_OFF: 'already_off' };
+  const INITIAL_ACTION = { IN_STOCK: 'Location shown', OUT_OF_STOCK: 'Awaiting decision', NOT_FOUND: 'Code not found', ALREADY_OFF: 'Already turned off' };
+
+  function startCheck(result, queueId) {
+    const now = nowStr();
+    const finished = result.outcome === 'NOT_FOUND' || result.outcome === 'ALREADY_OFF';
+    const productId = result.product ? result.product.id : null;
+    const check = {
+      id: state.nextCheckId++, started_at: now, completed_at: finished ? now : null, seconds: finished ? 0 : null,
+      code_entered: result.code, product_id: productId, result: RESULT_LABELS[result.outcome],
+      action: INITIAL_ACTION[result.outcome], queue_item_id: queueId || null,
+    };
+    state.checks.push(check);
+    const q = queueId && state.queue.find((x) => x.id === queueId);
+    if (q) Object.assign(q, { status: QUEUE_STATUS[result.outcome], product_id: productId, check_id: check.id, updated_at: now });
+    return check.id;
+  }
+
+  function finishCheck(checkId, action, complete = true) {
+    const c = state.checks.find((x) => x.id === checkId);
+    if (!c) return null;
+    c.action = action;
+    if (complete) {
+      c.completed_at = nowStr();
+      c.seconds = Math.round((Date.now() - parse(c.started_at)) / 1000);
+    }
+    return c.queue_item_id;
+  }
+
+  function setQueueStatus(queueId, status) {
+    const q = queueId && state.queue.find((x) => x.id === queueId);
+    if (q) Object.assign(q, { status, updated_at: nowStr() });
+  }
+
+  function turnOn(productId) {
+    const p = productById(productId);
+    if (!p) return false;
+    p.is_active = 1;
+    p.turned_off_at = null;
+    const now = nowStr();
+    state.checks.push({
+      id: state.nextCheckId++, started_at: now, completed_at: now, seconds: null, code_entered: p.route_code,
+      product_id: p.id, result: 'TURNED ON', action: 'Turned back on (delivery arrived)', queue_item_id: null,
+    });
+    return true;
+  }
+
+  function activityLog(search) {
+    const s = (search || '').toLowerCase();
+    return state.checks
+      .map((c) => {
+        const p = productById(c.product_id) || {};
+        return { id: c.id, started_at: c.started_at, seconds: c.seconds, code_entered: c.code_entered, result: c.result, action: c.action,
+          name: p.name || null, pack_size: p.pack_size || null, route_code: p.route_code || null, inventory_code: p.inventory_code || null };
+      })
+      .filter((r) => !s || [r.code_entered, r.name, r.inventory_code, r.result, r.action].some((v) => (v || '').toLowerCase().includes(s)))
+      .sort((a, b) => (a.started_at === b.started_at ? b.id - a.id : a.started_at < b.started_at ? 1 : -1))
+      .slice(0, 300);
+  }
+
+  function turnedOff() {
+    const today = fmt(todayStart());
+    return state.products
+      .filter((p) => !p.is_active)
+      .sort((a, b) => ((a.turned_off_at || '') < (b.turned_off_at || '') ? 1 : -1))
+      .map((p) => ({ id: p.id, route_code: p.route_code, inventory_code: p.inventory_code, name: p.name, pack_size: p.pack_size,
+        turned_off_at: p.turned_off_at, today: (p.turned_off_at || '') >= today }));
+  }
+
+  // ------------------------------------------------------------------ stats
+  function stats() {
+    const today = todayStart();
+    const first = new Date(today); first.setDate(first.getDate() - SEED.history_days);
+    const days = {};
+    state.checks.forEach((c) => {
+      if (c.result === 'TURNED ON') return;
+      const dt = parse(c.started_at);
+      if (dt < first) return;
+      const d = (days[dayKey(dt)] = days[dayKey(dt)] || { hours: Array(24).fill(0), seconds: [], in_stock: 0 });
+      d.hours[dt.getHours()] += 1;
+      if (c.result === 'IN STOCK') d.in_stock += 1;
+      if (c.seconds) d.seconds.push(c.seconds);
+    });
+    const ss = SEED.shift_start;
+    const summarize = (key) => {
+      const d = days[key] || { hours: Array(24).fill(0), seconds: [], in_stock: 0 };
+      const total = d.hours.reduce((a, b) => a + b, 0);
+      const firstTwo = d.hours[ss] + d.hours[ss + 1];
+      return {
+        date: key, total, in_stock: d.in_stock, hours: d.hours,
+        avg_seconds: d.seconds.length ? Math.round(d.seconds.reduce((a, b) => a + b, 0) / d.seconds.length) : null,
+        first_two_hours_share: total ? Math.round((100 * firstTwo) / total) : null,
+      };
+    };
+    const prior = [];
+    for (let n = SEED.history_days; n >= 1; n--) { const d = new Date(today); d.setDate(d.getDate() - n); prior.push(summarize(dayKey(d))); }
+    const priorAvg = Array.from({ length: 24 }, (_, h) => Math.round((10 * prior.reduce((a, p) => a + p.hours[h], 0)) / prior.length) / 10);
+    return { today: summarize(dayKey(today)), prior_days: prior, prior_avg_hours: priorAvg,
+      shift_start_hour: ss, shift_end_hour: SEED.shift_end, current_hour: new Date().getHours() };
+  }
+
+  // ------------------------------------------------------------------ queue
+  function listQueue() {
+    return state.queue.map((q) => {
+      const p = productById(q.product_id) || {};
+      return { id: q.id, code: q.code, status: q.status, added_at: q.added_at, updated_at: q.updated_at, check_id: q.check_id || null,
+        name: p.name || null, pack_size: p.pack_size || null };
+    });
+  }
+
+  function addToQueue(codes) {
+    let added = 0;
+    const now = nowStr();
+    (codes || []).forEach((raw) => {
+      const code = normalize(raw);
+      if (!code) return;
+      const p = findInRouteProgram(code);
+      state.queue.push({ id: state.nextQueueId++, code, product_id: p ? p.id : null, status: 'pending', added_at: now, updated_at: now, check_id: null });
+      added++;
+    });
+    return added;
+  }
+
+  // ------------------------------------------------------------------ router (same paths as server.py)
+  function route(path, body) {
+    const url = new URL(path, 'http://demo.local');
+    const q = Object.fromEntries(url.searchParams);
+    const parts = url.pathname.split('/').filter(Boolean);
+
+    if (body === undefined) {
+      if (url.pathname === '/api/lookup') {
+        const result = lookup(q.code);
+        if (q.log !== '0') result.check_id = startCheck(result, q.queue_id ? Number(q.queue_id) : null);
+        return result;
+      }
+      if (url.pathname === '/api/log') return activityLog(q.q);
+      if (url.pathname === '/api/turned-off') return turnedOff();
+      if (url.pathname === '/api/stats') return stats();
+      if (url.pathname === '/api/queue') return listQueue();
+    } else {
+      if (parts[1] === 'checks' && parts.length === 4) {
+        const id = Number(parts[2]);
+        if (parts[3] === 'relayed') { finishCheck(id, `Sent picker to ${body.location || ''}`); return { ok: true }; }
+        if (parts[3] === 'empty-slot') { setQueueStatus(finishCheck(id, 'Turned off + EMPTY SLOT confirmed'), 'empty_confirmed'); return { ok: true }; }
+      }
+      if (parts[1] === 'products' && parts.length === 4) {
+        const id = Number(parts[2]);
+        if (parts[3] === 'off') {
+          const p = productById(id);
+          Object.assign(p, { is_active: 0, turned_off_at: nowStr() });
+          if (body.check_id) setQueueStatus(finishCheck(body.check_id, 'Turned off - waiting for EMPTY SLOT', false), 'turned_off');
+          return { ok: true };
+        }
+        if (parts[3] === 'on') { turnOn(id); return { ok: true }; }
+      }
+      if (url.pathname === '/api/queue') { const added = addToQueue(body.codes); return { added, items: listQueue() }; }
+      if (url.pathname === '/api/queue/clear') {
+        const done = ['in_stock', 'empty_confirmed', 'not_found', 'already_off'];
+        state.queue = body.only_finished ? state.queue.filter((x) => !done.includes(x.status)) : [];
+        return listQueue();
+      }
+      if (parts[1] === 'queue' && parts[3] === 'remove') {
+        state.queue = state.queue.filter((x) => x.id !== Number(parts[2]));
+        return listQueue();
+      }
+    }
+    throw new Error('Not found: ' + url.pathname);
+  }
+
+  // app.js calls this instead of fetch() when it exists.
+  window.demoApi = async function (path, body) {
+    const out = route(path, body);
+    save();
+    return JSON.parse(JSON.stringify(out));
+  };
+
+  window.demoReset = function () { state = fresh(); state.welcomed = true; save(); };
+
+  // True only the first time this browser opens the demo today.
+  window.demoFirstVisit = function () {
+    if (state.welcomed) return false;
+    state.welcomed = true;
+    save();
+    return true;
+  };
+})();
+</script>
+<script>/* Stock Check prototype - browser side. Plain JavaScript, no libraries. */
+
+// ---------------------------------------------------------------- icons
+const ICON = {
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M7 12.5l3.2 3.2L17 9"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></svg>',
+  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7a8 8 0 1 0 11.4 0"/></svg>',
+  headset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M19 20c0 1.2-2 2-5 2"/></svg>',
+  question: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.6 2.6 0 0 1 5 1c0 1.8-2.5 2.2-2.5 4"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>',
+  arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+};
+
+const QUEUE_STATUS = {
+  pending:         { label: 'Pending',              cls: 'neutral', icon: 'clock' },
+  in_stock:        { label: 'In stock',             cls: 'good',    icon: 'check' },
+  out_of_stock:    { label: 'Out: needs turn-off',  cls: 'bad',     icon: 'x' },
+  turned_off:      { label: 'Turned off',           cls: 'warn',    icon: 'power' },
+  empty_confirmed: { label: 'Empty slot confirmed', cls: 'info',    icon: 'headset' },
+  not_found:       { label: 'Code not found',       cls: 'neutral', icon: 'question' },
+  already_off:     { label: 'Already off',          cls: 'neutral', icon: 'power' },
+};
+
+const RESULT_PILL = {
+  'IN STOCK':     { cls: 'good',    icon: 'check' },
+  'OUT OF STOCK': { cls: 'bad',     icon: 'x' },
+  'NOT FOUND':    { cls: 'neutral', icon: 'question' },
+  'ALREADY OFF':  { cls: 'neutral', icon: 'power' },
+  'TURNED ON':    { cls: 'info',    icon: 'power' },
+};
+
+// ---------------------------------------------------------------- helpers
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pill = (cls, icon, label) => `<span class="pill ${cls}">${ICON[icon]}${esc(label)}</span>`;
+
+async function api(path, body) {
+  const data = await apiCall(path, body);
+  // Anything that records or changes a check also changes the sidebar counts.
+  if (body !== undefined || path.startsWith('/api/lookup')) scheduleSidebar();
+  return data;
+}
+
+async function apiCall(path, body) {
+  if (window.demoApi) return window.demoApi(path, body);   // web demo: no server
+  const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function parseTs(s) { const [d, t] = s.split(' '); return new Date(`${d}T${t}`); }
+function timeOf(s) { return parseTs(s).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function isToday(s) { return parseTs(s).toDateString() === new Date().toDateString(); }
+function whenOf(s) {
+  if (isToday(s)) return timeOf(s);
+  return parseTs(s).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' + timeOf(s);
+}
+function duration(sec) {
+  if (sec == null) return '-';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+}
+function shortHour(h) { return `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`; }
+function hourLabel(h) { const ampm = h < 12 ? 'AM' : 'PM'; return `${h % 12 || 12} ${ampm}`; }
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function confirmDialog(title, bodyHtml, okLabel, okClass = 'btn-danger') {
+  const dlg = $('#confirm-dialog');
+  $('#confirm-title').textContent = title;
+  $('#confirm-body').innerHTML = bodyHtml;
+  const ok = $('#confirm-ok');
+  ok.textContent = okLabel;
+  ok.className = `btn btn-lg ${okClass}`;
+  const form = dlg.querySelector('form');
+  dlg.showModal();
+  ok.focus();
+  // Resolve from the button press or Escape directly; the dialog's 'close' event isn't reliable in every browser.
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      form.removeEventListener('submit', onSubmit);
+      dlg.removeEventListener('cancel', onCancel);
+      if (dlg.open) dlg.close();
+      resolve(value);
+    };
+    const onSubmit = (e) => { e.preventDefault(); finish(e.submitter && e.submitter.value === 'ok'); };
+    const onCancel = (e) => { e.preventDefault(); finish(false); };
+    form.addEventListener('submit', onSubmit);
+    dlg.addEventListener('cancel', onCancel);
+  });
+}
+
+// ---------------------------------------------------------------- tabs & clock
+let currentView = 'check';
+function showView(name) {
+  currentView = name;
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.view === name);
+    if (t.dataset.view === name) $('#crumb-label').textContent = t.dataset.label;
+  });
+  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+  if (name === 'check') $('#check-input').focus({ preventScroll: true });
+  if (name === 'queue') { loadQueue(); $('#queue-input').focus({ preventScroll: true }); }
+  if (name === 'log') loadLog();
+  if (name === 'stats') loadStats();
+}
+document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showView(t.dataset.view)));
+$('#side-search').addEventListener('click', () => showView('check'));
+
+// Page titles: "Stock check  Wed, Oct 28" and "October  2026", with the second half dimmed.
+(function fillTitles() {
+  const now = new Date();
+  document.querySelectorAll('.js-date').forEach((e) => { e.textContent = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); });
+  document.querySelectorAll('.js-month-name').forEach((e) => { e.textContent = now.toLocaleDateString([], { month: 'long' }); });
+  document.querySelectorAll('.js-year').forEach((e) => { e.textContent = now.getFullYear(); });
+})();
+
+// ---------------------------------------------------------------- sidebar counts
+let sidebarTimer;
+function scheduleSidebar() { clearTimeout(sidebarTimer); sidebarTimer = setTimeout(refreshSidebar, 150); }
+async function refreshSidebar() {
+  try {
+    const [s, off, q] = await Promise.all([apiCall('/api/stats'), apiCall('/api/turned-off'), apiCall('/api/queue')]);
+    $('#ss-checks').textContent = s.today.total;
+    $('#ss-instock').textContent = s.today.in_stock;
+    $('#ss-off').textContent = off.length;
+    $('#ss-queue').textContent = q.filter((x) => x.status === 'pending').length;
+    $('#off-count').textContent = off.length ? `${off.length} off` : '';
+  } catch (_) { /* counts are a convenience; never block the page */ }
+}
+document.addEventListener('keydown', (e) => {
+  const map = { F1: 'check', F2: 'queue', F3: 'log', F4: 'stats' };
+  if (map[e.key]) { e.preventDefault(); showView(map[e.key]); }
+  // Enter with nothing in particular focused runs the main button on the current card.
+  if (e.key === 'Enter' && (document.activeElement === document.body || !document.activeElement) && !$('#confirm-dialog').open) {
+    const primary = document.querySelector(`#view-${currentView} .result-area [data-primary]`);
+    if (primary) { e.preventDefault(); primary.click(); }
+  }
+});
+function tick() { $('#clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+tick(); setInterval(tick, 10000);
+
+// ---------------------------------------------------------------- the result card
+// An in-stock result is treated as "relayed to picker" when the next code is checked,
+// so a certifier working fast through scans never has to click.
+let pendingRelay = null;
+async function flushPendingRelay() {
+  if (!pendingRelay) return;
+  const p = pendingRelay; pendingRelay = null;
+  try { await api(`/api/checks/${p.check_id}/relayed`, { location: p.location }); } catch (_) { /* best effort */ }
+}
+
+function sendToText(data) {
+  return data.send_to.map((s) => `${s.location_id} (${s.quantity} cs)`).join(', ');
+}
+
+function verdictHtml(cls, icon, title, sub) {
+  return `<div class="verdict ${cls}"><span class="icon">${ICON[icon]}</span>
+    <div><div class="verdict-text">${esc(title)}</div>${sub ? `<div class="verdict-sub">${sub}</div>` : ''}</div></div>`;
+}
+
+function detailsHtml(d) {
+  const p = d.product;
+  const routes = d.routes.length
+    ? `<table class="table"><thead><tr><th>Route</th><th>Truck</th><th>Destination</th><th>Departs</th><th class="num">Cases</th></tr></thead><tbody>
+        ${d.routes.map((r) => `<tr><td class="truck">${esc(r.route_number)}</td><td>${esc(r.truck_type)} · ${esc(r.truck_number)}</td>
+          <td>${esc(r.destination)}</td><td>${timeOf(r.departs_at)}</td><td class="num">${r.cases}</td></tr>`).join('')}
+      </tbody></table>`
+    : '<p class="muted">Not on any of tomorrow\'s routes.</p>';
+  const stock = `<table class="table"><thead><tr><th>Location</th><th>Type</th><th class="num">Cases</th></tr></thead><tbody>
+      ${d.stock.map((s) => `<tr class="${s.quantity === 0 ? 'zero' : (s.type !== 'pick' ? 'highlight' : '')}">
+        <td class="mono">${esc(s.location_id)}</td><td>${s.type === 'pick' ? 'Pick slot' : s.type === 'reserve' ? 'Reserve' : 'Overflow'}</td>
+        <td class="num">${s.quantity === 0 ? '0 (empty)' : s.quantity}</td></tr>`).join('')}
+      <tr><td colspan="2"><b>Total in building</b></td><td class="num"><b>${d.total_cases}</b></td></tr>
+    </tbody></table>`;
+  return `
+    <div class="product-line"><span class="product-name">${esc(p.name)}</span><span class="product-pack">${esc(p.pack_size)}</span></div>
+    <div class="codes">
+      <div class="code-chip"><small>Route program code</small><span class="mono">${esc(p.route_code)}</span></div>
+      <div class="code-chip"><small>Inventory system code</small><span class="mono">${esc(d.inventory_code)}</span></div>
+    </div>
+    <div class="lookup-steps">✓ Found in route program → ✓ translated to inventory code → ✓ checked reserve &amp; overflow (automatic)</div>
+    <div class="two-col">
+      <div><h3 class="section-title">Tomorrow's routes (${d.routes.length})</h3><div class="table-wrap">${routes}</div></div>
+      <div><h3 class="section-title">Warehouse inventory</h3><div class="table-wrap">${stock}</div></div>
+    </div>`;
+}
+
+/**
+ * Draw a result card into `container`.
+ * stage: show | relayed | decide | turned_off | empty_done | already_off | not_found
+ * ctx.onChange() is called after any action (used by the queue to refresh).
+ */
+function renderResult(container, data, stage, ctx = {}) {
+  const d = data;
+  const rerender = (s) => renderResult(container, d, s, ctx);
+  const nextBtn = ctx.nextButton ? `<button class="btn btn-primary btn-lg" data-act="next" ${stage === 'decide' ? '' : 'data-primary'}>Next pending ${ICON.arrow}</button>` : '';
+  let top = '', actions = '';
+
+  if (d.outcome === 'NOT_FOUND') {
+    container.innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'CODE NOT FOUND',
+      `<span class="mono">${esc(d.code)}</span> is not in the route program. Ask the picker to read the code again.`)}
+      ${nextBtn ? `<div class="result-body"><div class="action-row">${nextBtn}</div></div>` : ''}</div>`;
+    bind();
+    return;
+  }
+
+  if (d.outcome === 'IN_STOCK') {
+    const first = d.send_to[0];
+    const inPickOnly = first && first.type === 'pick';
+    top = verdictHtml('good', 'check', 'IN STOCK', `${d.total_cases} cases in the building`);
+    actions = `
+      <div class="send-to">
+        <div class="send-to-label">Send picker to</div>
+        ${d.send_to.map((s) => `<div class="send-to-row"><span class="send-loc">${esc(s.location_id)}</span>
+          <span class="send-qty">${s.quantity} cases</span>
+          <span class="send-type">${s.type === 'pick' ? 'Pick slot' : s.type === 'reserve' ? 'Reserve' : 'Overflow'}</span></div>`).join('')}
+        ${inPickOnly ? '<div class="send-note">⚠ System shows stock in the pick slot itself. Have the picker recheck the slot, including behind and under it.</div>' : ''}
+      </div>
+      ${stage === 'relayed'
+        ? `<div class="done-banner">${ICON.check} Location relayed to picker.</div><div class="action-row">${nextBtn}</div>`
+        : `<div class="action-row"><button class="btn btn-good btn-lg" data-act="relayed">${ICON.check} Told picker: done</button>${nextBtn}
+             <span class="muted">Checking the next code also marks this as done.</span></div>`}`;
+  }
+
+  if (d.outcome === 'OUT_OF_STOCK' || stage === 'turned_off' || stage === 'empty_done') {
+    if (stage === 'decide') {
+      top = verdictHtml('bad', 'x', 'OUT OF STOCK', 'No product in pick slot, reserve, or overflow.');
+      actions = `<div class="action-row"><button class="btn btn-danger btn-lg" data-act="off">${ICON.power} Turn off product</button>${nextBtn}</div>`;
+    } else if (stage === 'turned_off') {
+      top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is now off in the route program.');
+      actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
+          <div class="reminder-text">Tell the picker to say <b>EMPTY SLOT</b> in their headset.</div>
+          <button class="btn btn-good btn-lg" data-act="empty" data-primary>${ICON.check} Picker said it: mark done</button></div>`;
+    } else {
+      top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is off in the route program and the headset system.');
+      actions = `<div class="done-banner">${ICON.headset} EMPTY SLOT confirmed. No other picker will be sent to this slot.</div>
+        <div class="action-row">${nextBtn}</div>`;
+    }
+  }
+
+  if (stage === 'already_off') {
+    const at = d.product.turned_off_at ? `at ${whenOf(d.product.turned_off_at)}` : '';
+    top = verdictHtml('neutral', 'power', 'ALREADY TURNED OFF', `This product was turned off ${at}.`);
+    actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
+        <div class="reminder-text">If the headset still sent the picker here, have them say <b>EMPTY SLOT</b>.</div></div>
+      <div class="action-row"><button class="btn btn-lg" data-act="on">${ICON.power} Turn back on (delivery arrived)</button>${nextBtn}</div>`;
+  }
+
+  container.innerHTML = `<div class="result">${top}<div class="result-body">${actions}${detailsHtml(d)}</div></div>`;
+  bind();
+
+  function bind() {
+    container.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => act(b.dataset.act)));
+    const focusTarget = container.querySelector('[data-act="empty"]') || (ctx.nextButton && ['show', 'relayed', 'empty_done', 'not_found'].includes(stage) && container.querySelector('[data-act="next"]'));
+    // Wait a tick so the confirm dialog's own focus handling has finished.
+    if (focusTarget) setTimeout(() => focusTarget.isConnected && focusTarget.focus(), 0);
+  }
+
+  async function act(what) {
+    try {
+      if (what === 'next') { ctx.onNext && ctx.onNext(); return; }
+      if (what === 'relayed') {
+        if (pendingRelay && pendingRelay.check_id === d.check_id) pendingRelay = null;
+        await api(`/api/checks/${d.check_id}/relayed`, { location: sendToText(d) });
+        toast('Logged: picker sent to ' + sendToText(d));
+        rerender('relayed');
+      }
+      if (what === 'off') {
+        const ok = await confirmDialog('Turn off this product?',
+          `<b>${esc(d.product.name)} · ${esc(d.product.pack_size)}</b><br>Route code <span class="mono">${esc(d.product.route_code)}</span> will be turned off in the route program for all of tomorrow's routes.`,
+          'Yes, turn it off');
+        if (!ok) return;
+        await api(`/api/products/${d.product.id}/off`, { check_id: d.check_id });
+        d.product.is_active = 0;
+        toast('Product turned off');
+        rerender('turned_off');
+      }
+      if (what === 'empty') {
+        await api(`/api/checks/${d.check_id}/empty-slot`, {});
+        toast('EMPTY SLOT confirmed and logged');
+        rerender('empty_done');
+      }
+      if (what === 'on') {
+        const ok = await confirmDialog('Turn this product back on?',
+          `<b>${esc(d.product.name)} · ${esc(d.product.pack_size)}</b><br>Only do this if product has arrived and is in a slot.`,
+          'Yes, turn it on', 'btn-good');
+        if (!ok) return;
+        await api(`/api/products/${d.product.id}/on`, {});
+        toast('Product turned back on');
+        container.innerHTML = `<div class="done-banner">${ICON.power} ${esc(d.product.name)} · ${esc(d.product.pack_size)} is back on in the route program.</div>`;
+      }
+      ctx.onChange && ctx.onChange();
+      if (!ctx.nextButton && what !== 'off') $('#check-input').focus({ preventScroll: true });
+    } catch (err) {
+      toast('Error: ' + err.message);
+    }
+  }
+}
+
+function stageForOutcome(outcome) {
+  return { IN_STOCK: 'show', OUT_OF_STOCK: 'decide', ALREADY_OFF: 'already_off', NOT_FOUND: 'not_found' }[outcome];
+}
+
+// ---------------------------------------------------------------- CHECK view
+$('#check-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#check-input');
+  const code = input.value.trim();
+  if (!code) return;
+  input.value = '';
+  await flushPendingRelay();
+  try {
+    const data = await api(`/api/lookup?code=${encodeURIComponent(code)}`);
+    if (data.outcome === 'IN_STOCK') pendingRelay = { check_id: data.check_id, location: sendToText(data) };
+    renderResult($('#check-result'), data, stageForOutcome(data.outcome));
+  } catch (err) {
+    toast('Error: ' + err.message);
+  }
+  input.focus({ preventScroll: true });
+});
+$('#check-input').addEventListener('keydown', (e) => { if (e.key === 'Escape') e.target.value = ''; });
+
+// ---------------------------------------------------------------- QUEUE view
+let queue = [];
+let currentQueueId = null;
+const queueResults = new Map();   // queue item id -> { data, stage }
+
+async function loadQueue() {
+  queue = await api('/api/queue');
+  renderQueue();
+}
+
+function renderQueue() {
+  const counts = {};
+  queue.forEach((q) => { counts[q.status] = (counts[q.status] || 0) + 1; });
+  const pending = counts.pending || 0;
+  const badge = $('#queue-badge');
+  badge.hidden = pending === 0;
+  badge.textContent = pending;
+  $('#queue-title-count').textContent = queue.length ? `${pending} pending` : 'empty';
+  $('#ss-queue').textContent = pending;
+  $('#queue-summary').textContent = queue.length
+    ? `${queue.length} in queue · ${pending} pending · ${queue.length - pending} worked`
+    : 'Queue is empty.';
+  $('#queue-list').innerHTML = queue.map((q, i) => {
+    const st = QUEUE_STATUS[q.status] || QUEUE_STATUS.pending;
+    return `<li class="queue-item ${q.id === currentQueueId ? 'current' : ''}" data-id="${q.id}">
+      <span class="queue-num">${i + 1}</span>
+      <span><div class="queue-code">${esc(q.code)}</div><div class="queue-name">${q.name ? esc(q.name + ' · ' + q.pack_size) : 'Unknown code'}</div>
+        <div class="queue-status">${pill(st.cls, st.icon, st.label)}</div></span>
+      <button class="queue-remove" title="Remove from queue" data-remove="${q.id}">×</button></li>`;
+  }).join('');
+  $('#queue-next').disabled = pending === 0;
+}
+
+async function addCodes(codes) {
+  codes = codes.map((c) => c.trim()).filter(Boolean);
+  if (!codes.length) return;
+  const res = await api('/api/queue', { codes });
+  queue = res.items;
+  renderQueue();
+  toast(`Added ${res.added} code${res.added === 1 ? '' : 's'} to queue`);
+}
+
+$('#queue-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#queue-input');
+  const code = input.value;
+  input.value = '';
+  await addCodes([code]);
+  input.focus({ preventScroll: true });
+});
+$('#queue-paste-btn').addEventListener('click', async () => {
+  const ta = $('#queue-paste');
+  await addCodes(ta.value.split(/[\s,;]+/));
+  ta.value = '';
+});
+
+$('#queue-list').addEventListener('click', async (e) => {
+  const rm = e.target.closest('[data-remove]');
+  if (rm) {
+    e.stopPropagation();
+    const id = Number(rm.dataset.remove);
+    queue = await api(`/api/queue/${id}/remove`, {});
+    queueResults.delete(id);
+    if (id === currentQueueId) { currentQueueId = null; $('#queue-result').innerHTML = '<div class="empty-state">Removed. Pick another item.</div>'; }
+    renderQueue();
+    return;
+  }
+  const li = e.target.closest('.queue-item');
+  if (li) openQueueItem(Number(li.dataset.id));
+});
+
+async function openQueueItem(id) {
+  const item = queue.find((q) => q.id === id);
+  if (!item) return;
+  currentQueueId = id;
+  renderQueue();
+  const container = $('#queue-result');
+  const ctx = { nextButton: true, onNext: workNext, onChange: refreshQueueKeepResult };
+
+  if (item.status === 'pending') {
+    await flushPendingRelay();
+    const data = await api(`/api/lookup?code=${encodeURIComponent(item.code)}&queue_id=${id}`);
+    if (data.outcome === 'IN_STOCK') pendingRelay = { check_id: data.check_id, location: sendToText(data) };
+    queueResults.set(id, { data, stage: stageForOutcome(data.outcome) });
+    await loadQueue();
+  } else if (!queueResults.has(id)) {
+    // Worked earlier (e.g. before a page refresh): rebuild the card without logging a new check.
+    const data = await api(`/api/lookup?code=${encodeURIComponent(item.code)}&log=0`);
+    data.check_id = item.check_id;
+    const stage = { in_stock: 'relayed', out_of_stock: 'decide', turned_off: 'turned_off', empty_confirmed: 'empty_done', not_found: 'not_found', already_off: 'already_off' }[item.status];
+    if (stage === 'turned_off' || stage === 'empty_done' || stage === 'decide') data.outcome = 'OUT_OF_STOCK';
+    queueResults.set(id, { data, stage });
+  }
+  const r = queueResults.get(id);
+  renderResult(container, r.data, r.stage, ctx);
+}
+
+// Keep the cached card in sync with the stage it has moved to.
+async function refreshQueueKeepResult() {
+  const item = queue.find((q) => q.id === currentQueueId);
+  await loadQueue();
+  const updated = queue.find((q) => q.id === currentQueueId);
+  if (item && updated && queueResults.has(updated.id)) {
+    const stage = { in_stock: 'relayed', out_of_stock: 'decide', turned_off: 'turned_off', empty_confirmed: 'empty_done' }[updated.status];
+    if (stage) queueResults.get(updated.id).stage = stage;
+  }
+}
+
+function workNext() {
+  const next = queue.find((q) => q.status === 'pending');
+  if (!next) {
+    toast('No pending codes left in the queue');
+    $('#queue-input').focus({ preventScroll: true });
+    return;
+  }
+  openQueueItem(next.id);
+}
+$('#queue-next').addEventListener('click', workNext);
+$('#queue-clear-done').addEventListener('click', async () => {
+  queue = await api('/api/queue/clear', { only_finished: true });
+  renderQueue();
+});
+$('#queue-clear-all').addEventListener('click', async () => {
+  if (!queue.length) return;
+  const ok = await confirmDialog('Clear the whole queue?', 'This removes every code from the list. The activity log is not affected.', 'Clear queue');
+  if (!ok) return;
+  queue = await api('/api/queue/clear', {});
+  queueResults.clear();
+  currentQueueId = null;
+  $('#queue-result').innerHTML = '<div class="empty-state">Queue cleared.</div>';
+  renderQueue();
+});
+
+// ---------------------------------------------------------------- LOG view
+async function loadLog() {
+  const [off, log] = await Promise.all([
+    api('/api/turned-off'),
+    api(`/api/log?q=${encodeURIComponent($('#log-search').value.trim())}`),
+  ]);
+  $('#turned-off-list').innerHTML = off.length
+    ? off.map((p) => `<div class="off-row">
+        ${pill('bad', 'power', 'OFF')}
+        <div class="off-info"><div class="off-name">${esc(p.name)} · ${esc(p.pack_size)}</div>
+          <div class="muted"><span class="mono">${esc(p.route_code)}</span> · <span class="mono">${esc(p.inventory_code)}</span> ·
+          turned off ${p.turned_off_at ? whenOf(p.turned_off_at) : ''}${p.today ? ' (today)' : ''}</div></div>
+        <button class="btn btn-good" data-on="${p.id}" data-name="${esc(p.name + ' · ' + p.pack_size)}">${ICON.power} Turn back on</button>
+      </div>`).join('')
+    : '<p class="muted">No products are turned off.</p>';
+
+  $('#log-body').innerHTML = log.map((r) => {
+    const rp = RESULT_PILL[r.result] || { cls: 'neutral', icon: 'question' };
+    return `<tr><td>${whenOf(r.started_at)}</td>
+      <td>${r.name ? `<b>${esc(r.name)}</b><br><span class="muted">${esc(r.pack_size)}</span>` : '<span class="muted">Unknown code</span>'}</td>
+      <td class="mono">${esc(r.code_entered)}</td><td>${pill(rp.cls, rp.icon, r.result)}</td>
+      <td>${esc(r.action)}</td><td class="num">${duration(r.seconds)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">No matching checks.</td></tr>';
+}
+
+$('#turned-off-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-on]');
+  if (!b) return;
+  const ok = await confirmDialog('Turn this product back on?',
+    `<b>${esc(b.dataset.name)}</b><br>Only do this if product has arrived and is in a slot.`, 'Yes, turn it on', 'btn-good');
+  if (!ok) return;
+  await api(`/api/products/${b.dataset.on}/on`, {});
+  toast('Product turned back on');
+  loadLog();
+});
+let searchTimer;
+$('#log-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadLog, 250); });
+
+// ---------------------------------------------------------------- STATS view
+async function loadStats() {
+  const s = await api('/api/stats');
+  const t = s.today;
+  const priorAvgSecs = s.prior_days.filter((d) => d.avg_seconds).map((d) => d.avg_seconds);
+  const priorAvg = priorAvgSecs.length ? Math.round(priorAvgSecs.reduce((a, b) => a + b, 0) / priorAvgSecs.length) : null;
+  const peakHour = t.total ? t.hours.indexOf(Math.max(...t.hours)) : null;
+
+  $('#stat-tiles').innerHTML = [
+    ['Checks today', t.total, `${s.prior_days.length ? Math.round(s.prior_days.reduce((a, d) => a + d.total, 0) / s.prior_days.length) : '-'} per day, previous 3 days`],
+    ['Avg time per check', duration(t.avg_seconds), priorAvg ? `${duration(priorAvg)} previous 3 days` : ''],
+    ['Busiest hour today', peakHour == null ? '-' : `${hourLabel(peakHour)}`, peakHour == null ? '' : `${t.hours[peakHour]} checks`],
+    ['First 2 hours of shift', t.first_two_hours_share == null ? '-' : `${t.first_two_hours_share}%`, `of today's checks (shift starts ${hourLabel(s.shift_start_hour)})`],
+  ].map(([label, value, sub]) => `<div class="tile"><div class="tile-label">${label}</div><div class="tile-value">${value}</div><div class="tile-sub">${sub}</div></div>`).join('');
+
+  $('#chart-total').textContent = `${t.total} checks today`;
+  lastStats = s;
+  drawHourChart(s);
+
+  const hours = chartHours(s);
+  $('#hour-table').innerHTML = `<table class="table"><thead><tr><th>Hour</th><th class="num">Today</th><th class="num">Prev. 3-day avg</th></tr></thead><tbody>
+    ${hours.map((h) => `<tr><td>${hourLabel(h)}</td><td class="num">${t.hours[h]}</td><td class="num">${s.prior_avg_hours[h]}</td></tr>`).join('')}</tbody></table>`;
+
+  $('#day-table').innerHTML = `<table class="table"><thead><tr><th>Date</th><th class="num">Checks</th><th class="num">Avg time per check</th><th class="num">In first 2 hours</th></tr></thead><tbody>
+    ${s.prior_days.slice().reverse().map((d) => `<tr><td>${new Date(d.date + 'T12:00').toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</td>
+      <td class="num">${d.total}</td><td class="num">${duration(d.avg_seconds)}</td><td class="num">${d.first_two_hours_share ?? '-'}%</td></tr>`).join('')}</tbody></table>`;
+}
+
+// The shift's hours, stretched to include any checks made before or after it.
+function chartHours(s) {
+  const used = s.today.hours.map((v, h) => (v > 0 ? h : null)).filter((h) => h != null);
+  const first = Math.min(s.shift_start_hour - 1, ...used);
+  const last = Math.max(s.shift_end_hour + 1, ...used);
+  const hours = [];
+  for (let h = first; h <= last; h++) hours.push(h);
+  return hours;
+}
+
+// Smooth curve through the points using horizontal tangents, so it never overshoots a real value.
+function smoothPath(pts) {
+  return pts.map(([x, y], i) => {
+    if (i === 0) return `M${x},${y}`;
+    const [px, py] = pts[i - 1];
+    const mx = (px + x) / 2;
+    return `C${mx},${py} ${mx},${y} ${x},${y}`;
+  }).join(' ');
+}
+
+let lastStats = null;
+function drawHourChart(s) {
+  const el = $('#hour-chart');
+  const hours = chartHours(s);
+  const today = s.today.hours, prior = s.prior_avg_hours;
+  const W = Math.max(280, el.clientWidth), H = el.clientHeight || 300;
+  const m = { l: 34, r: 14, t: 22, b: 26 };
+  const maxVal = Math.max(5, ...hours.map((h) => Math.max(today[h], prior[h])));
+  const step = maxVal > 30 ? 10 : 5;
+  const top = Math.ceil(maxVal / step) * step;
+  const x = (i) => m.l + (i * (W - m.l - m.r)) / Math.max(1, hours.length - 1);
+  const y = (v) => m.t + (1 - v / top) * (H - m.t - m.b);
+  const narrow = W < 560;
+
+  let grid = '';
+  for (let v = 0; v <= top; v += step) {
+    grid += `<line class="grid-line" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/>
+      <text class="axis-label" x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+  }
+  const labelEvery = narrow ? 2 : 1;
+  const xLabels = hours.map((h, i) => (i % labelEvery ? '' :
+    `<text class="axis-label ${h === s.current_hour ? 'now' : ''}" x="${x(i)}" y="${H - 6}" text-anchor="middle">${narrow ? shortHour(h) : hourLabel(h)}</text>`)).join('');
+
+  const todayPts = hours.map((h, i) => [x(i), y(today[h])]);
+  const priorPts = hours.map((h, i) => [x(i), y(prior[h])]);
+  const line = smoothPath(todayPts);
+  const area = `${line} L${x(hours.length - 1)},${y(0)} L${x(0)},${y(0)} Z`;
+  const peakI = hours.reduce((best, h, i) => (today[h] > today[hours[best]] ? i : best), 0);
+  const peakV = today[hours[peakI]];
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Checks per hour today compared with the previous 3-day average">
+      <defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" style="stop-color: var(--chart-fill)"/><stop offset="1" style="stop-color: var(--chart-fill); stop-opacity: 0"/>
+      </linearGradient></defs>
+      ${grid}${xLabels}
+      <path d="${area}" fill="url(#chart-fill)"/>
+      <path class="line-avg" d="${smoothPath(priorPts)}"/>
+      <path class="line-today" d="${line}"/>
+      ${peakV > 0 ? `<circle class="pt" cx="${x(peakI)}" cy="${y(peakV)}" r="4"/>
+        <text class="pt-label" x="${x(peakI)}" y="${y(peakV) - 10}" text-anchor="middle">${peakV}</text>` : ''}
+      <line class="crosshair" id="chart-cross" x1="0" x2="0" y1="${m.t}" y2="${y(0)}" visibility="hidden"/>
+      <circle class="pt" id="chart-dot" r="4" visibility="hidden"/>
+      ${hours.map((h, i) => `<rect class="hit" data-i="${i}" x="${x(i) - (W - m.l - m.r) / Math.max(1, hours.length - 1) / 2}" y="0"
+          width="${(W - m.l - m.r) / Math.max(1, hours.length - 1)}" height="${H}"/>`).join('')}
+    </svg><div class="tooltip" id="chart-tip"></div>`;
+
+  const tip = $('#chart-tip'), cross = $('#chart-cross'), dot = $('#chart-dot');
+  const hide = () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); };
+  el.querySelectorAll('.hit').forEach((r) => {
+    r.addEventListener('mouseenter', () => {
+      const i = Number(r.dataset.i), h = hours[i];
+      const scale = el.clientWidth / W;
+      cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(today[h])); dot.setAttribute('visibility', 'visible');
+      tip.innerHTML = `<b>${hourLabel(h)}–${hourLabel((h + 1) % 24)}</b><br>Today: ${today[h]} checks<br>Prev. 3-day avg: ${prior[h]}`;
+      tip.style.display = 'block';
+      tip.style.left = `${Math.min(el.clientWidth - 80, Math.max(80, x(i) * scale))}px`;
+      tip.style.top = `${y(Math.max(today[h], prior[h])) * scale}px`;
+    });
+    r.addEventListener('mouseleave', hide);
+  });
+}
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (currentView === 'stats' && lastStats) drawHourChart(lastStats); }, 150);
+});
+
+// ---------------------------------------------------------------- start
+refreshSidebar();
+loadQueue();
+$('#check-input').focus({ preventScroll: true });
+</script>
+<script>/* Web demo only: wires up the intro panel. Runs after app.js. */
+(function () {
+  const SAMPLE_QUEUE = ['RT-35578', 'RT-84535', 'RT-94839', 'RT-54781', 'RT-99999'];
+  const INTRO_KEY = 'stockcheck-demo-intro-closed';
+
+  function runCode(code) {
+    showView('check');
+    $('#check-input').value = code;
+    $('#check-form').requestSubmit();
+  }
+
+  document.querySelectorAll('[data-try]').forEach((b) => b.addEventListener('click', () => runCode(b.dataset.try)));
+
+  $('#demo-queue').addEventListener('click', async () => {
+    showView('queue');
+    await addCodes(SAMPLE_QUEUE);
+  });
+
+  $('#demo-reset').addEventListener('click', async () => {
+    const ok = await confirmDialog('Reset the demo?',
+      'This clears your checks, queue and turn-offs and puts back the original sample data.', 'Reset demo');
+    if (!ok) return;
+    window.demoReset();
+    queueResults.clear();
+    currentQueueId = null;
+    pendingRelay = null;
+    $('#check-result').innerHTML = '<div class="empty-state">Scan or type a product code to check stock.</div>';
+    $('#queue-result').innerHTML = '<div class="empty-state">Add codes on the left, then press <b>Work next pending</b>.</div>';
+    await loadQueue();
+    refreshSidebar();
+    showView(currentView);
+    toast('Demo reset');
+  });
+
+  // Remember whether the visitor collapsed the intro.
+  const details = $('#demo-intro-details');
+  try { if (localStorage.getItem(INTRO_KEY) === '1') details.open = false; } catch (_) { /* ignore */ }
+  details.addEventListener('toggle', () => {
+    try { localStorage.setItem(INTRO_KEY, details.open ? '0' : '1'); } catch (_) { /* ignore */ }
+  });
+
+  // First visit: open on a real result so the page shows what it does.
+  if (window.demoFirstVisit()) runCode('RT-76823');
+})();
+</script>
+</body>
+</html>
