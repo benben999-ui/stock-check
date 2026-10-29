@@ -6,6 +6,8 @@
 
 ![Stock Check showing an IN STOCK result: send the picker to reserve location R-D3-02, 64 cases](docs/screenshot.png)
 
+![Truck routes screen: route 407 with its first store stop and each order line's pick status](docs/screenshot-routes.png)
+
 > **Personal concept project with made-up data.** It does not connect to any real company system, and it is not affiliated with or endorsed by any company. Every product code, route, truck, location and quantity is invented.
 
 ## The problem
@@ -25,14 +27,14 @@ This happens in a heavy burst at the start of every shift, while trucks are on f
 
 - **One input, one answer.** Scan or type a code and press Enter. The code-to-code lookup and the stock search happen automatically, and the screen shows the product, both codes, tomorrow's routes, and every location with quantities.
 - **A clear outcome.** **IN STOCK** shows where to send the picker in very large text. **OUT OF STOCK** gives a "Turn off product" button with a confirm step, then a reminder to tell the picker to say **EMPTY SLOT**, which the certifier marks as done.
-- **A shift-start queue** for when several pickers arrive at once. Each code shows its status: pending, in stock, turned off, or empty slot confirmed.
+- **Truck routes**: every truck leaving tomorrow, with its stops, lines and cases. Click a truck to see each store in delivery order and every line on that store's order, marked **In pick slot**, **Pick from reserve**, **No stock** or **Turned off**. That shows at a glance which stores will get short orders.
 - **An activity log** of every check, plus a "turned off right now" list with a **Turn back on** button for when a delivery arrives.
 - **Stats** with checks per hour and average time per check, so the start-of-shift spike is visible.
 
 ## How it's built
 
 - **Python standard library only**: a small web server (`server.py`) and a SQLite database. There's nothing to `pip install`.
-- **A separate data layer**: `data/repository.py` is the only code that touches the database, and the three-step lookup lives there. `data/seed.py` generates the mock data: 50 products, 18 routes, pick/reserve/overflow locations, and 3 days of history.
+- **A separate data layer**: `data/repository.py` is the only code that touches the database, and the three-step lookup lives there. `data/seed.py` generates the mock data: 50 products, 18 routes with 102 made-up store stops and their orders, pick/reserve/overflow locations, and 3 days of history.
 - **Plain HTML, CSS and JavaScript** for the screen (`static/`), with no framework and no build step.
 - **The live demo** (`docs/index.html`) runs the same screens with a browser-only copy of the data layer (`demo/demo-backend.js`), built by `build_demo.py`.
 
@@ -67,7 +69,7 @@ The app runs only on your computer. Nothing is sent over the internet.
 
 ## 3. Reset the demo data
 
-To start fresh (empty queue, products turned back on, log back to the original demo history):
+To start fresh (products turned back on, log back to the original demo history):
 
 1. Double-click **`reset_demo.bat`**.
 2. Press **Y** to confirm.
@@ -88,13 +90,13 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 - **OUT OF STOCK** (red, ✕ icon): click **Turn off product**, then confirm. A yellow reminder appears: *"Tell the picker to say EMPTY SLOT in their headset."* When the picker has done it, click **Picker said it: mark done**.
 - Tip: you can type only the 5 digits (for example `76823` instead of `RT-76823`).
 
-### Shift Queue (F2)
-For the start-of-shift rush, when several pickers come up at once.
-- Scan or type codes into the **Add codes** box, pressing Enter after each one. To add many at once, use **Paste a list of codes**.
-- Press **Work next pending ▶**. The result card for that code shows on the right.
-- Each code shows its status as an icon plus a word: ⏳ Pending, ✓ In stock, ✕ Out: needs turn-off, ⏻ Turned off, 🎧 Empty slot confirmed.
-- After each item, press **Next pending** (or just press Enter, since that button is already selected).
-- The queue is saved, so refreshing the page doesn't lose it.
+### Truck Routes (F2)
+- Lists every truck leaving tomorrow: route number, truck, area, departure time, stops, lines and cases. The last column flags lines that will **ship short** (no stock, or turned off) and lines that must be **picked from reserve**.
+- Search by route, truck or area, or filter by truck type (Route, Bulk, Transport).
+- Click a truck to open it. You'll see each store stop in delivery order, with its address and order number, and every product on that store's order with cases and a pick status: ✓ In pick slot, → Pick from reserve, ✕ No stock, ⏻ Turned off.
+- Tick **Only lines that need attention** to hide the lines that are fine.
+- Click any product code to run a stock check on it. On the Check screen, the route numbers in a result open that route.
+- Turning a product off or back on updates every route right away.
 
 ### Activity Log (F3)
 - **Turned off right now** lists every product that is currently off. Click **Turn back on** when a delivery arrives.
@@ -118,7 +120,7 @@ For the start-of-shift rush, when several pickers come up at once.
 | `RT-95569` | Starry 20oz: **already turned off** earlier today |
 | `RT-99999` | **Code not found** |
 
-**Queue test:** paste `RT-35578, RT-84535, RT-94839, RT-54781, RT-99999` into the queue's paste box.
+**Routes test:** open **Truck routes**, click route **407**, and look at the first stop. Click `RT-20172` (No stock) to check it, turn it off, then come back: the line now shows **Turned off**.
 
 ---
 

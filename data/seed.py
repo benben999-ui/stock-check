@@ -21,6 +21,8 @@ HISTORY_DAYS = 3          # full days of history before today
 SCHEMA = """
 DROP TABLE IF EXISTS queue_items;
 DROP TABLE IF EXISTS checks;
+DROP TABLE IF EXISTS order_lines;
+DROP TABLE IF EXISTS stores;
 DROP TABLE IF EXISTS route_items;
 DROP TABLE IF EXISTS routes;
 DROP TABLE IF EXISTS inventory;
@@ -59,6 +61,23 @@ CREATE TABLE routes (
     departs_at    TEXT NOT NULL              -- tomorrow, local time
 );
 
+CREATE TABLE stores (
+    id            INTEGER PRIMARY KEY,
+    route_id      INTEGER NOT NULL REFERENCES routes(id),
+    stop_number   INTEGER NOT NULL,          -- delivery order on the truck
+    name          TEXT NOT NULL,
+    address       TEXT NOT NULL,
+    order_number  TEXT NOT NULL
+);
+
+CREATE TABLE order_lines (
+    store_id    INTEGER NOT NULL REFERENCES stores(id),
+    product_id  INTEGER NOT NULL REFERENCES products(id),
+    cases       INTEGER NOT NULL,
+    PRIMARY KEY (store_id, product_id)
+);
+
+-- Total cases of each product on each truck (the sum of that truck's store orders).
 CREATE TABLE route_items (
     route_id    INTEGER NOT NULL REFERENCES routes(id),
     product_id  INTEGER NOT NULL REFERENCES products(id),
@@ -74,18 +93,7 @@ CREATE TABLE checks (
     code_entered   TEXT NOT NULL,
     product_id     INTEGER REFERENCES products(id),
     result         TEXT NOT NULL,           -- IN STOCK / OUT OF STOCK / NOT FOUND / ALREADY OFF / TURNED ON
-    action         TEXT NOT NULL,           -- what the certifier did
-    queue_item_id  INTEGER
-);
-
-CREATE TABLE queue_items (
-    id          INTEGER PRIMARY KEY,
-    code        TEXT NOT NULL,
-    product_id  INTEGER REFERENCES products(id),
-    status      TEXT NOT NULL DEFAULT 'pending',
-    added_at    TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    check_id    INTEGER
+    action         TEXT NOT NULL            -- what the certifier did
 );
 
 CREATE INDEX idx_checks_started ON checks(started_at);
@@ -125,6 +133,21 @@ AREAS = [
     "Lowell / Ada", "Caledonia / Byron Center", "Greenville", "Ionia", "Big Rapids",
     "Lansing DC (transfer)", "Kalamazoo DC (transfer)", "Downtown Grand Rapids", "Cascade / Forest Hills",
 ]
+
+
+# Made-up store names: "<place> <kind>", e.g. "Riverside Food Mart".
+STORE_PLACES = [
+    "Maple", "Riverside", "Lakeshore", "Northgate", "Pine Hill", "Cedar", "Harbor", "Westside", "Oak Street",
+    "Meadow", "Sunrise", "Valley", "Bridge Street", "Lakeview", "Elm", "Summit", "Country", "Corner",
+    "Parkside", "Hillcrest", "Orchard", "Union", "Mill Creek", "Prairie", "Birch", "Station",
+]
+STORE_KINDS = [
+    "Market", "Grocery", "Food Mart", "Fuel & Food", "Party Store", "Express", "Pharmacy", "Foods",
+    "Mini Mart", "Travel Plaza", "Deli", "Beverage & Spirits", "Fresh Market", "Quick Stop",
+]
+BIG_STORE_KINDS = ["Supercenter", "Warehouse Club", "Superstore", "Hypermarket"]
+STREETS = ["Maple St", "Center Ave", "Lake Rd", "Main St", "Division Ave", "Park Dr", "River St", "Elm Ave",
+           "Market St", "Ridge Rd", "Airport Rd", "Chicago Dr", "State St", "Washington Ave", "Pine St"]
 
 
 def make_route_code(rng, used):
@@ -225,11 +248,50 @@ def seed(db_path=DB_PATH, now=None):
         "INSERT INTO routes (id, route_number, truck_type, truck_number, destination, departs_at) VALUES (?,?,?,?,?,?)",
         routes,
     )
-    route_items = []
-    for pid in ids:
-        for rid in rng.sample(range(1, len(routes) + 1), rng.randint(1, 6)):
-            route_items.append((rid, pid, rng.randint(2, 60)))
-    conn.executemany("INSERT INTO route_items (route_id, product_id, cases) VALUES (?,?,?)", route_items)
+    # --- stores on each route and what each store ordered ---------------------
+    stores, order_lines = [], []
+    used_names, used_orders = set(), set()
+    store_id = 0
+    for rid, _, ttype, _, area, _ in routes:
+        towns = [t.replace(" (transfer)", "").replace(" DC", "") for t in area.split(" / ")]
+        if ttype == "Transport":
+            plan = [("dc", 1)]                      # one stop: another distribution center
+        elif ttype == "Bulk":
+            plan = [("big", 1)] * rng.randint(2, 3)  # a few large stores, big orders
+        else:
+            plan = [("small", 1)] * rng.randint(5, 9)
+        for stop, (kind, _) in enumerate(plan, start=1):
+            store_id += 1
+            town = rng.choice(towns)
+            if kind == "dc":
+                name = f"{town} Distribution Center, Dock {rng.randint(2, 14)}"
+                lines, case_range = rng.randint(22, 32), (20, 120)
+            else:
+                while True:
+                    kinds = BIG_STORE_KINDS if kind == "big" else STORE_KINDS
+                    name = f"{rng.choice(STORE_PLACES)} {rng.choice(kinds)}"
+                    if name not in used_names:
+                        used_names.add(name)
+                        break
+                name = f"{name}, {town}"
+                lines, case_range = ((rng.randint(10, 18), (10, 70)) if kind == "big" else (rng.randint(4, 11), (1, 24)))
+            while True:
+                order_number = f"SO-{rng.randint(100000, 999999)}"
+                if order_number not in used_orders:
+                    used_orders.add(order_number)
+                    break
+            address = f"{rng.randint(100, 9899)} {rng.choice(STREETS)}, {town}"
+            stores.append((store_id, rid, stop, name, address, order_number))
+            for pid in rng.sample(ids, lines):
+                order_lines.append((store_id, pid, rng.randint(*case_range)))
+    conn.executemany(
+        "INSERT INTO stores (id, route_id, stop_number, name, address, order_number) VALUES (?,?,?,?,?,?)", stores)
+    conn.executemany("INSERT INTO order_lines (store_id, product_id, cases) VALUES (?,?,?)", order_lines)
+    conn.execute(
+        """INSERT INTO route_items (route_id, product_id, cases)
+           SELECT s.route_id, ol.product_id, SUM(ol.cases)
+           FROM order_lines ol JOIN stores s ON s.id = ol.store_id
+           GROUP BY s.route_id, ol.product_id""")
 
     # --- check history: heavy at shift start, rare later ---------------------
     # Relative weight of checks per hour of the shift.
@@ -295,11 +357,13 @@ def seed(db_path=DB_PATH, now=None):
     )
     conn.commit()
     conn.close()
-    return {"products": len(products), "routes": len(routes), "checks": len(checks)}
+    return {"products": len(products), "routes": len(routes), "stores": len(stores),
+            "order_lines": len(order_lines), "checks": len(checks)}
 
 
 if __name__ == "__main__":
     info = seed()
-    print(f"Demo data reset: {info['products']} products, {info['routes']} routes, {info['checks']} logged checks.")
+    print(f"Demo data reset: {info['products']} products, {info['routes']} routes, {info['stores']} store stops "
+          f"({info['order_lines']} order lines), {info['checks']} logged checks.")
     if "--pause" in sys.argv:
         input("Press Enter to close...")

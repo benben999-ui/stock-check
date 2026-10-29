@@ -69,11 +69,8 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         try:
             if url.path == "/api/lookup":
-                queue_id = int(q["queue_id"]) if q.get("queue_id") else None
                 result = repo.lookup(q.get("code", ""))
-                # log=0 re-displays an earlier check without recording a new one
-                if q.get("log") != "0":
-                    result["check_id"] = repo.start_check(result, queue_id)
+                result["check_id"] = repo.start_check(result)
                 return self._send_json(result)
             if url.path == "/api/log":
                 return self._send_json(repo.activity_log(q.get("q", "")))
@@ -81,8 +78,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(repo.turned_off_products())
             if url.path == "/api/stats":
                 return self._send_json(repo.stats())
-            if url.path == "/api/queue":
-                return self._send_json(repo.list_queue())
+            if url.path == "/api/routes":
+                return self._send_json(repo.list_routes())
+            # /api/routes/<id>
+            parts = url.path.strip("/").split("/")
+            if parts[:2] == ["api", "routes"] and len(parts) == 3:
+                detail = repo.route_detail(int(parts[2]))
+                return self._send_json(detail) if detail else self._send_json({"error": "No such route"}, 404)
             if url.path.startswith("/api/"):
                 return self._send_json({"error": "Not found"}, 404)
             return self._serve_static(url.path)
@@ -114,15 +116,6 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     return self._send_json({"error": "Unknown action"}, 404)
                 return self._send_json({"ok": True})
-            if url.path == "/api/queue":
-                added = repo.add_to_queue(body.get("codes", []))
-                return self._send_json({"added": added, "items": repo.list_queue()})
-            if url.path == "/api/queue/clear":
-                repo.clear_queue(only_finished=bool(body.get("only_finished")))
-                return self._send_json(repo.list_queue())
-            if parts[:2] == ["api", "queue"] and len(parts) == 4 and parts[3] == "remove":
-                repo.remove_queue_item(int(parts[2]))
-                return self._send_json(repo.list_queue())
             if url.path == "/api/reset":
                 return self._send_json(repo.reset_demo_data())
             return self._send_json({"error": "Not found"}, 404)

@@ -69,6 +69,9 @@ def export_seed():
         "inventory": [list(row) for row in conn.execute("SELECT product_id, location_id, quantity FROM inventory")],
         "routes": routes,
         "route_items": [list(row) for row in conn.execute("SELECT route_id, product_id, cases FROM route_items")],
+        "stores": [list(row) for row in conn.execute(
+            "SELECT id, route_id, stop_number, name, address, order_number FROM stores ORDER BY id")],
+        "order_lines": [list(row) for row in conn.execute("SELECT store_id, product_id, cases FROM order_lines")],
         "checks": checks,
         "shift_start": seed_module.SHIFT_START_HOUR,
         "shift_end": seed_module.SHIFT_END_HOUR,

@@ -11,14 +11,12 @@ const ICON = {
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
-const QUEUE_STATUS = {
-  pending:         { label: 'Pending',              cls: 'neutral', icon: 'clock' },
-  in_stock:        { label: 'In stock',             cls: 'good',    icon: 'check' },
-  out_of_stock:    { label: 'Out: needs turn-off',  cls: 'bad',     icon: 'x' },
-  turned_off:      { label: 'Turned off',           cls: 'warn',    icon: 'power' },
-  empty_confirmed: { label: 'Empty slot confirmed', cls: 'info',    icon: 'headset' },
-  not_found:       { label: 'Code not found',       cls: 'neutral', icon: 'question' },
-  already_off:     { label: 'Already off',          cls: 'neutral', icon: 'power' },
+// Where a line on a store's order can be picked from right now.
+const LINE_STATUS = {
+  ok:      { label: 'In pick slot',      cls: 'good', icon: 'check' },
+  reserve: { label: 'Pick from reserve', cls: 'info', icon: 'arrow' },
+  out:     { label: 'No stock',          cls: 'bad',  icon: 'x' },
+  off:     { label: 'Turned off',        cls: 'bad',  icon: 'power' },
 };
 
 const RESULT_PILL = {
@@ -108,7 +106,7 @@ function showView(name) {
   });
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
   if (name === 'check') $('#check-input').focus({ preventScroll: true });
-  if (name === 'queue') { loadQueue(); $('#queue-input').focus({ preventScroll: true }); }
+  if (name === 'routes') loadRoutes();
   if (name === 'log') loadLog();
   if (name === 'stats') loadStats();
 }
@@ -128,16 +126,17 @@ let sidebarTimer;
 function scheduleSidebar() { clearTimeout(sidebarTimer); sidebarTimer = setTimeout(refreshSidebar, 150); }
 async function refreshSidebar() {
   try {
-    const [s, off, q] = await Promise.all([apiCall('/api/stats'), apiCall('/api/turned-off'), apiCall('/api/queue')]);
+    const [s, off, routes] = await Promise.all([apiCall('/api/stats'), apiCall('/api/turned-off'), apiCall('/api/routes')]);
     $('#ss-checks').textContent = s.today.total;
     $('#ss-instock').textContent = s.today.in_stock;
     $('#ss-off').textContent = off.length;
-    $('#ss-queue').textContent = q.filter((x) => x.status === 'pending').length;
+    $('#ss-short').textContent = routes.reduce((n, r) => n + r.short_lines, 0);
+    $('#routes-count').textContent = routes.length;
     $('#off-count').textContent = off.length ? `${off.length} off` : '';
   } catch (_) { /* counts are a convenience; never block the page */ }
 }
 document.addEventListener('keydown', (e) => {
-  const map = { F1: 'check', F2: 'queue', F3: 'log', F4: 'stats' };
+  const map = { F1: 'check', F2: 'routes', F3: 'log', F4: 'stats' };
   if (map[e.key]) { e.preventDefault(); showView(map[e.key]); }
   // Enter with nothing in particular focused runs the main button on the current card.
   if (e.key === 'Enter' && (document.activeElement === document.body || !document.activeElement) && !$('#confirm-dialog').open) {
@@ -171,7 +170,7 @@ function detailsHtml(d) {
   const p = d.product;
   const routes = d.routes.length
     ? `<table class="table"><thead><tr><th>Route</th><th>Truck</th><th>Destination</th><th>Departs</th><th class="num">Cases</th></tr></thead><tbody>
-        ${d.routes.map((r) => `<tr><td class="truck">${esc(r.route_number)}</td><td>${esc(r.truck_type)} · ${esc(r.truck_number)}</td>
+        ${d.routes.map((r) => `<tr><td class="truck"><button class="code-link" data-open-route="${r.id}" title="Open route ${esc(r.route_number)}">${esc(r.route_number)}</button></td><td>${esc(r.truck_type)} · ${esc(r.truck_number)}</td>
           <td>${esc(r.destination)}</td><td>${timeOf(r.departs_at)}</td><td class="num">${r.cases}</td></tr>`).join('')}
       </tbody></table>`
     : '<p class="muted">Not on any of tomorrow\'s routes.</p>';
@@ -197,19 +196,15 @@ function detailsHtml(d) {
 /**
  * Draw a result card into `container`.
  * stage: show | relayed | decide | turned_off | empty_done | already_off | not_found
- * ctx.onChange() is called after any action (used by the queue to refresh).
  */
-function renderResult(container, data, stage, ctx = {}) {
+function renderResult(container, data, stage) {
   const d = data;
-  const rerender = (s) => renderResult(container, d, s, ctx);
-  const nextBtn = ctx.nextButton ? `<button class="btn btn-primary btn-lg" data-act="next" ${stage === 'decide' ? '' : 'data-primary'}>Next pending ${ICON.arrow}</button>` : '';
+  const rerender = (s) => renderResult(container, d, s);
   let top = '', actions = '';
 
   if (d.outcome === 'NOT_FOUND') {
     container.innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'CODE NOT FOUND',
-      `<span class="mono">${esc(d.code)}</span> is not in the route program. Ask the picker to read the code again.`)}
-      ${nextBtn ? `<div class="result-body"><div class="action-row">${nextBtn}</div></div>` : ''}</div>`;
-    bind();
+      `<span class="mono">${esc(d.code)}</span> is not in the route program. Ask the picker to read the code again.`)}</div>`;
     return;
   }
 
@@ -226,15 +221,15 @@ function renderResult(container, data, stage, ctx = {}) {
         ${inPickOnly ? '<div class="send-note">⚠ System shows stock in the pick slot itself. Have the picker recheck the slot, including behind and under it.</div>' : ''}
       </div>
       ${stage === 'relayed'
-        ? `<div class="done-banner">${ICON.check} Location relayed to picker.</div><div class="action-row">${nextBtn}</div>`
-        : `<div class="action-row"><button class="btn btn-good btn-lg" data-act="relayed">${ICON.check} Told picker: done</button>${nextBtn}
+        ? `<div class="done-banner">${ICON.check} Location relayed to picker.</div>`
+        : `<div class="action-row"><button class="btn btn-good btn-lg" data-act="relayed">${ICON.check} Told picker: done</button>
              <span class="muted">Checking the next code also marks this as done.</span></div>`}`;
   }
 
   if (d.outcome === 'OUT_OF_STOCK' || stage === 'turned_off' || stage === 'empty_done') {
     if (stage === 'decide') {
       top = verdictHtml('bad', 'x', 'OUT OF STOCK', 'No product in pick slot, reserve, or overflow.');
-      actions = `<div class="action-row"><button class="btn btn-danger btn-lg" data-act="off">${ICON.power} Turn off product</button>${nextBtn}</div>`;
+      actions = `<div class="action-row"><button class="btn btn-danger btn-lg" data-act="off">${ICON.power} Turn off product</button></div>`;
     } else if (stage === 'turned_off') {
       top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is now off in the route program.');
       actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
@@ -242,8 +237,7 @@ function renderResult(container, data, stage, ctx = {}) {
           <button class="btn btn-good btn-lg" data-act="empty" data-primary>${ICON.check} Picker said it: mark done</button></div>`;
     } else {
       top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is off in the route program and the headset system.');
-      actions = `<div class="done-banner">${ICON.headset} EMPTY SLOT confirmed. No other picker will be sent to this slot.</div>
-        <div class="action-row">${nextBtn}</div>`;
+      actions = `<div class="done-banner">${ICON.headset} EMPTY SLOT confirmed. No other picker will be sent to this slot.</div>`;
     }
   }
 
@@ -252,7 +246,7 @@ function renderResult(container, data, stage, ctx = {}) {
     top = verdictHtml('neutral', 'power', 'ALREADY TURNED OFF', `This product was turned off ${at}.`);
     actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
         <div class="reminder-text">If the headset still sent the picker here, have them say <b>EMPTY SLOT</b>.</div></div>
-      <div class="action-row"><button class="btn btn-lg" data-act="on">${ICON.power} Turn back on (delivery arrived)</button>${nextBtn}</div>`;
+      <div class="action-row"><button class="btn btn-lg" data-act="on">${ICON.power} Turn back on (delivery arrived)</button></div>`;
   }
 
   container.innerHTML = `<div class="result">${top}<div class="result-body">${actions}${detailsHtml(d)}</div></div>`;
@@ -260,14 +254,17 @@ function renderResult(container, data, stage, ctx = {}) {
 
   function bind() {
     container.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => act(b.dataset.act)));
-    const focusTarget = container.querySelector('[data-act="empty"]') || (ctx.nextButton && ['show', 'relayed', 'empty_done', 'not_found'].includes(stage) && container.querySelector('[data-act="next"]'));
+    container.querySelectorAll('[data-open-route]').forEach((b) => b.addEventListener('click', () => {
+      showView('routes');
+      openRoute(Number(b.dataset.openRoute));
+    }));
+    const focusTarget = container.querySelector('[data-act="empty"]');
     // Wait a tick so the confirm dialog's own focus handling has finished.
     if (focusTarget) setTimeout(() => focusTarget.isConnected && focusTarget.focus(), 0);
   }
 
   async function act(what) {
     try {
-      if (what === 'next') { ctx.onNext && ctx.onNext(); return; }
       if (what === 'relayed') {
         if (pendingRelay && pendingRelay.check_id === d.check_id) pendingRelay = null;
         await api(`/api/checks/${d.check_id}/relayed`, { location: sendToText(d) });
@@ -298,8 +295,7 @@ function renderResult(container, data, stage, ctx = {}) {
         toast('Product turned back on');
         container.innerHTML = `<div class="done-banner">${ICON.power} ${esc(d.product.name)} · ${esc(d.product.pack_size)} is back on in the route program.</div>`;
       }
-      ctx.onChange && ctx.onChange();
-      if (!ctx.nextButton && what !== 'off') $('#check-input').focus({ preventScroll: true });
+      if (what !== 'off') $('#check-input').focus({ preventScroll: true });
     } catch (err) {
       toast('Error: ' + err.message);
     }
@@ -329,138 +325,141 @@ $('#check-form').addEventListener('submit', async (e) => {
 });
 $('#check-input').addEventListener('keydown', (e) => { if (e.key === 'Escape') e.target.value = ''; });
 
-// ---------------------------------------------------------------- QUEUE view
-let queue = [];
-let currentQueueId = null;
-const queueResults = new Map();   // queue item id -> { data, stage }
+// ---------------------------------------------------------------- ROUTES view
+// Tomorrow's trucks. Click one to see each store stop and what that store ordered.
+let routesCache = [];
+let currentRouteId = null;
+let routeDetailCache = null;
 
-async function loadQueue() {
-  queue = await api('/api/queue');
-  renderQueue();
+// Run a full stock check on a code from anywhere (route detail, demo intro).
+function checkCode(code) {
+  showView('check');
+  $('#check-input').value = code;
+  $('#check-form').requestSubmit();
 }
 
-function renderQueue() {
-  const counts = {};
-  queue.forEach((q) => { counts[q.status] = (counts[q.status] || 0) + 1; });
-  const pending = counts.pending || 0;
-  const badge = $('#queue-badge');
-  badge.hidden = pending === 0;
-  badge.textContent = pending;
-  $('#queue-title-count').textContent = queue.length ? `${pending} pending` : 'empty';
-  $('#ss-queue').textContent = pending;
-  $('#queue-summary').textContent = queue.length
-    ? `${queue.length} in queue · ${pending} pending · ${queue.length - pending} worked`
-    : 'Queue is empty.';
-  $('#queue-list').innerHTML = queue.map((q, i) => {
-    const st = QUEUE_STATUS[q.status] || QUEUE_STATUS.pending;
-    return `<li class="queue-item ${q.id === currentQueueId ? 'current' : ''}" data-id="${q.id}">
-      <span class="queue-num">${i + 1}</span>
-      <span><div class="queue-code">${esc(q.code)}</div><div class="queue-name">${q.name ? esc(q.name + ' · ' + q.pack_size) : 'Unknown code'}</div>
-        <div class="queue-status">${pill(st.cls, st.icon, st.label)}</div></span>
-      <button class="queue-remove" title="Remove from queue" data-remove="${q.id}">×</button></li>`;
-  }).join('');
-  $('#queue-next').disabled = pending === 0;
+async function loadRoutes() {
+  routesCache = await api('/api/routes');
+  updateRoutesTitle();
+  if (currentRouteId) await openRoute(currentRouteId, { keepScroll: true });
+  else renderRouteList();
 }
 
-async function addCodes(codes) {
-  codes = codes.map((c) => c.trim()).filter(Boolean);
-  if (!codes.length) return;
-  const res = await api('/api/queue', { codes });
-  queue = res.items;
-  renderQueue();
-  toast(`Added ${res.added} code${res.added === 1 ? '' : 's'} to queue`);
+function updateRoutesTitle() {
+  const shorts = routesCache.reduce((n, r) => n + r.short_lines, 0);
+  $('#routes-title-count').textContent = `${routesCache.length} trucks${shorts ? ` · ${shorts} short lines` : ''}`;
 }
 
-$('#queue-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const input = $('#queue-input');
-  const code = input.value;
-  input.value = '';
-  await addCodes([code]);
-  input.focus({ preventScroll: true });
+function attentionPills(shortLines, reserveLines) {
+  const out = [];
+  if (shortLines) out.push(pill('bad', 'x', `${shortLines} short`));
+  if (reserveLines) out.push(pill('info', 'arrow', `${reserveLines} from reserve`));
+  return out.length ? out.join(' ') : pill('good', 'check', 'All in pick slots');
+}
+
+function renderRouteList() {
+  currentRouteId = null;
+  const q = $('#routes-search').value.trim().toLowerCase();
+  const type = $('#routes-type').value;
+  const rows = routesCache.filter((r) => (!type || r.truck_type === type) &&
+    (!q || [r.route_number, r.truck_number, r.destination].some((v) => v.toLowerCase().includes(q))));
+  $('#routes-toolbar').hidden = false;
+  $('#routes-body').innerHTML = `
+    <div class="card">
+      <div class="table-wrap">
+        <table class="table route-table">
+          <thead><tr><th>Route</th><th>Truck</th><th>Destination</th><th>Departs</th>
+            <th class="num">Stops</th><th class="num">Lines</th><th class="num">Cases</th><th>Needs attention</th></tr></thead>
+          <tbody>
+            ${rows.map((r) => `<tr class="route-row" data-route="${r.id}" tabindex="0" role="button" aria-label="Open route ${esc(r.route_number)}">
+              <td class="truck">${esc(r.route_number)}</td>
+              <td>${esc(r.truck_type)} · <span class="mono">${esc(r.truck_number)}</span></td>
+              <td>${esc(r.destination)}</td>
+              <td class="mono">${timeOf(r.departs_at)}</td>
+              <td class="num">${r.stops}</td><td class="num">${r.lines}</td><td class="num">${r.cases}</td>
+              <td>${attentionPills(r.short_lines, r.reserve_lines)}</td></tr>`).join('')
+              || '<tr><td colspan="8" class="muted">No routes match.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function openRoute(id, opts = {}) {
+  currentRouteId = id;
+  routeDetailCache = await api(`/api/routes/${id}`);
+  renderRouteDetail();
+  if (!opts.keepScroll) window.scrollTo({ top: 0 });
+}
+
+function renderRouteDetail() {
+  const { route, stores } = routeDetailCache;
+  const onlyAttention = $('#routes-attention') && $('#routes-attention').checked;
+  const lines = stores.reduce((n, s) => n + s.lines.length, 0);
+  const cases = stores.reduce((n, s) => n + s.cases, 0);
+  const shortLines = stores.reduce((n, s) => n + s.short_lines, 0);
+  const reserveLines = stores.reduce((n, s) => n + s.lines.filter((l) => l.status === 'reserve').length, 0);
+
+  $('#routes-toolbar').hidden = true;
+  $('#routes-body').innerHTML = `
+    <button class="btn btn-ghost back-btn" data-back>← All routes</button>
+    <div class="card route-head">
+      <div class="route-head-main">
+        <div class="card-label">Route</div>
+        <div class="route-number">${esc(route.route_number)}</div>
+        <div class="muted">${esc(route.truck_type)} · truck <span class="mono">${esc(route.truck_number)}</span> · ${esc(route.destination)}</div>
+      </div>
+      <div class="route-facts">
+        <div><div class="card-label">Departs</div><div class="fact mono">${timeOf(route.departs_at)}</div></div>
+        <div><div class="card-label">Stops</div><div class="fact">${stores.length}</div></div>
+        <div><div class="card-label">Lines</div><div class="fact">${lines}</div></div>
+        <div><div class="card-label">Cases</div><div class="fact">${cases}</div></div>
+      </div>
+      <div class="route-attention">${attentionPills(shortLines, reserveLines)}
+        <label class="toggle"><input type="checkbox" id="routes-attention" ${onlyAttention ? 'checked' : ''}> Only lines that need attention</label>
+      </div>
+    </div>
+    ${stores.map((s) => {
+      const shown = onlyAttention ? s.lines.filter((l) => l.status !== 'ok') : s.lines;
+      return `<div class="card stop-card">
+        <div class="stop-head">
+          <span class="stop-num" aria-label="Stop ${s.stop_number}">${s.stop_number}</span>
+          <div class="stop-info">
+            <div class="stop-name">${esc(s.name)}</div>
+            <div class="muted">${esc(s.address)} · Order <span class="mono">${esc(s.order_number)}</span></div>
+          </div>
+          <div class="stop-totals"><span class="mono">${s.lines.length} lines · ${s.cases} cs</span>
+            ${s.short_lines ? pill('bad', 'x', `${s.short_lines} short`) : ''}</div>
+        </div>
+        ${shown.length ? `<div class="table-wrap"><table class="table">
+          <thead><tr><th>Product</th><th>Code</th><th class="num">Cases</th><th>Pick status</th></tr></thead>
+          <tbody>${shown.map((l) => {
+            const st = LINE_STATUS[l.status];
+            return `<tr class="${l.status === 'off' || l.status === 'out' ? 'short' : ''}">
+              <td><b>${esc(l.name)}</b> <span class="muted">${esc(l.pack_size)}</span></td>
+              <td><button class="code-link" data-code="${esc(l.route_code)}" title="Run a stock check on ${esc(l.route_code)}">${esc(l.route_code)}</button></td>
+              <td class="num">${l.cases}</td>
+              <td>${pill(st.cls, st.icon, st.label)}</td></tr>`;
+          }).join('')}</tbody></table></div>`
+          : '<p class="muted stop-empty">Every line on this order is in its pick slot.</p>'}
+      </div>`;
+    }).join('')}`;
+}
+
+$('#routes-body').addEventListener('click', (e) => {
+  if (e.target.closest('[data-back]')) { renderRouteList(); return; }
+  const code = e.target.closest('[data-code]');
+  if (code) { checkCode(code.dataset.code); return; }
+  const row = e.target.closest('[data-route]');
+  if (row) openRoute(Number(row.dataset.route));
 });
-$('#queue-paste-btn').addEventListener('click', async () => {
-  const ta = $('#queue-paste');
-  await addCodes(ta.value.split(/[\s,;]+/));
-  ta.value = '';
+$('#routes-body').addEventListener('keydown', (e) => {
+  const row = e.target.closest('[data-route]');
+  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openRoute(Number(row.dataset.route)); }
 });
-
-$('#queue-list').addEventListener('click', async (e) => {
-  const rm = e.target.closest('[data-remove]');
-  if (rm) {
-    e.stopPropagation();
-    const id = Number(rm.dataset.remove);
-    queue = await api(`/api/queue/${id}/remove`, {});
-    queueResults.delete(id);
-    if (id === currentQueueId) { currentQueueId = null; $('#queue-result').innerHTML = '<div class="empty-state">Removed. Pick another item.</div>'; }
-    renderQueue();
-    return;
-  }
-  const li = e.target.closest('.queue-item');
-  if (li) openQueueItem(Number(li.dataset.id));
-});
-
-async function openQueueItem(id) {
-  const item = queue.find((q) => q.id === id);
-  if (!item) return;
-  currentQueueId = id;
-  renderQueue();
-  const container = $('#queue-result');
-  const ctx = { nextButton: true, onNext: workNext, onChange: refreshQueueKeepResult };
-
-  if (item.status === 'pending') {
-    await flushPendingRelay();
-    const data = await api(`/api/lookup?code=${encodeURIComponent(item.code)}&queue_id=${id}`);
-    if (data.outcome === 'IN_STOCK') pendingRelay = { check_id: data.check_id, location: sendToText(data) };
-    queueResults.set(id, { data, stage: stageForOutcome(data.outcome) });
-    await loadQueue();
-  } else if (!queueResults.has(id)) {
-    // Worked earlier (e.g. before a page refresh): rebuild the card without logging a new check.
-    const data = await api(`/api/lookup?code=${encodeURIComponent(item.code)}&log=0`);
-    data.check_id = item.check_id;
-    const stage = { in_stock: 'relayed', out_of_stock: 'decide', turned_off: 'turned_off', empty_confirmed: 'empty_done', not_found: 'not_found', already_off: 'already_off' }[item.status];
-    if (stage === 'turned_off' || stage === 'empty_done' || stage === 'decide') data.outcome = 'OUT_OF_STOCK';
-    queueResults.set(id, { data, stage });
-  }
-  const r = queueResults.get(id);
-  renderResult(container, r.data, r.stage, ctx);
-}
-
-// Keep the cached card in sync with the stage it has moved to.
-async function refreshQueueKeepResult() {
-  const item = queue.find((q) => q.id === currentQueueId);
-  await loadQueue();
-  const updated = queue.find((q) => q.id === currentQueueId);
-  if (item && updated && queueResults.has(updated.id)) {
-    const stage = { in_stock: 'relayed', out_of_stock: 'decide', turned_off: 'turned_off', empty_confirmed: 'empty_done' }[updated.status];
-    if (stage) queueResults.get(updated.id).stage = stage;
-  }
-}
-
-function workNext() {
-  const next = queue.find((q) => q.status === 'pending');
-  if (!next) {
-    toast('No pending codes left in the queue');
-    $('#queue-input').focus({ preventScroll: true });
-    return;
-  }
-  openQueueItem(next.id);
-}
-$('#queue-next').addEventListener('click', workNext);
-$('#queue-clear-done').addEventListener('click', async () => {
-  queue = await api('/api/queue/clear', { only_finished: true });
-  renderQueue();
-});
-$('#queue-clear-all').addEventListener('click', async () => {
-  if (!queue.length) return;
-  const ok = await confirmDialog('Clear the whole queue?', 'This removes every code from the list. The activity log is not affected.', 'Clear queue');
-  if (!ok) return;
-  queue = await api('/api/queue/clear', {});
-  queueResults.clear();
-  currentQueueId = null;
-  $('#queue-result').innerHTML = '<div class="empty-state">Queue cleared.</div>';
-  renderQueue();
-});
+$('#routes-body').addEventListener('change', (e) => { if (e.target.id === 'routes-attention') renderRouteDetail(); });
+$('#routes-search').addEventListener('input', renderRouteList);
+$('#routes-type').addEventListener('change', renderRouteList);
 
 // ---------------------------------------------------------------- LOG view
 async function loadLog() {
@@ -619,5 +618,4 @@ window.addEventListener('resize', () => {
 
 // ---------------------------------------------------------------- start
 refreshSidebar();
-loadQueue();
 $('#check-input').focus({ preventScroll: true });

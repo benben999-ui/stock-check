@@ -40,6 +40,15 @@ def ensure_database():
     """Create and seed the database the first time the app runs."""
     if not os.path.exists(DB_PATH):
         seed_module.seed()
+        return
+    # A database made by an older version (before truck routes had stores) is rebuilt.
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        has_stores = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stores'").fetchone()
+    finally:
+        conn.close()
+    if not has_stores:
+        seed_module.seed()
 
 
 def reset_demo_data():
@@ -68,7 +77,7 @@ def _find_product_in_route_program(conn, code):
 
 def _routes_for_product(conn, product_id):
     rows = conn.execute(
-        """SELECT r.route_number, r.truck_type, r.truck_number, r.destination, r.departs_at, ri.cases
+        """SELECT r.id, r.route_number, r.truck_type, r.truck_number, r.destination, r.departs_at, ri.cases
            FROM route_items ri JOIN routes r ON r.id = ri.route_id
            WHERE ri.product_id = ? ORDER BY r.departs_at""",
         (product_id,),
@@ -150,15 +159,7 @@ RESULT_LABELS = {
     "ALREADY_OFF": "ALREADY OFF",
 }
 
-QUEUE_STATUS_FOR_OUTCOME = {
-    "IN_STOCK": "in_stock",
-    "OUT_OF_STOCK": "out_of_stock",
-    "NOT_FOUND": "not_found",
-    "ALREADY_OFF": "already_off",
-}
-
-
-def start_check(lookup_result, queue_item_id=None):
+def start_check(lookup_result):
     """Record a check the moment it's looked up. Returns the new check id."""
     outcome = lookup_result["outcome"]
     product_id = lookup_result.get("product", {}).get("id") if lookup_result.get("product") else None
@@ -174,27 +175,21 @@ def start_check(lookup_result, queue_item_id=None):
     conn = _connect()
     try:
         cur = conn.execute(
-            """INSERT INTO checks (started_at, completed_at, seconds, code_entered, product_id, result, action, queue_item_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO checks (started_at, completed_at, seconds, code_entered, product_id, result, action)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (now, now if finished else None, 0 if finished else None, lookup_result["code"],
-             product_id, RESULT_LABELS[outcome], initial_action, queue_item_id),
+             product_id, RESULT_LABELS[outcome], initial_action),
         )
-        check_id = cur.lastrowid
-        if queue_item_id:
-            conn.execute(
-                "UPDATE queue_items SET status = ?, product_id = ?, check_id = ?, updated_at = ? WHERE id = ?",
-                (QUEUE_STATUS_FOR_OUTCOME[outcome], product_id, check_id, now, queue_item_id),
-            )
         conn.commit()
-        return check_id
+        return cur.lastrowid
     finally:
         conn.close()
 
 
 def _finish_check(conn, check_id, action, complete=True):
-    row = conn.execute("SELECT started_at, queue_item_id FROM checks WHERE id = ?", (check_id,)).fetchone()
+    row = conn.execute("SELECT started_at FROM checks WHERE id = ?", (check_id,)).fetchone()
     if row is None:
-        return None
+        return
     now = _now()
     if complete:
         secs = int((now - _parse(row["started_at"])).total_seconds())
@@ -202,7 +197,6 @@ def _finish_check(conn, check_id, action, complete=True):
                      (action, _fmt(now), secs, check_id))
     else:
         conn.execute("UPDATE checks SET action = ? WHERE id = ?", (action, check_id))
-    return row["queue_item_id"]
 
 
 def mark_location_relayed(check_id, location_text):
@@ -220,21 +214,16 @@ def turn_off_product(product_id, check_id=None):
     try:
         conn.execute("UPDATE products SET is_active = 0, turned_off_at = ? WHERE id = ?", (now, product_id))
         if check_id:
-            queue_id = _finish_check(conn, check_id, "Turned off - waiting for EMPTY SLOT", complete=False)
-            if queue_id:
-                conn.execute("UPDATE queue_items SET status = 'turned_off', updated_at = ? WHERE id = ?", (now, queue_id))
+            _finish_check(conn, check_id, "Turned off - waiting for EMPTY SLOT", complete=False)
         conn.commit()
     finally:
         conn.close()
 
 
 def confirm_empty_slot(check_id):
-    now = _fmt(_now())
     conn = _connect()
     try:
-        queue_id = _finish_check(conn, check_id, "Turned off + EMPTY SLOT confirmed")
-        if queue_id:
-            conn.execute("UPDATE queue_items SET status = 'empty_confirmed', updated_at = ? WHERE id = ?", (now, queue_id))
+        _finish_check(conn, check_id, "Turned off + EMPTY SLOT confirmed")
         conn.commit()
     finally:
         conn.close()
@@ -348,69 +337,95 @@ def stats():
 
 
 # ---------------------------------------------------------------------------
-# Shift-start queue
+# Truck routes and store orders
 # ---------------------------------------------------------------------------
 
-def list_queue():
-    conn = _connect()
-    try:
-        rows = conn.execute(
-            """SELECT q.id, q.code, q.status, q.added_at, q.updated_at, q.check_id,
-                      p.name, p.pack_size
-               FROM queue_items q LEFT JOIN products p ON p.id = q.product_id
-               ORDER BY q.id"""
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+def _product_pick_status(conn):
+    """Where each product can be picked from right now.
 
-
-def add_to_queue(codes):
-    now = _fmt(_now())
-    conn = _connect()
-    try:
-        added = 0
-        for raw in codes:
-            code = _normalize_code(raw)
-            if not code:
-                continue
-            product = _find_product_in_route_program(conn, code)
-            conn.execute(
-                "INSERT INTO queue_items (code, product_id, status, added_at, updated_at) VALUES (?, ?, 'pending', ?, ?)",
-                (code, product["id"] if product else None, now, now),
-            )
-            added += 1
-        conn.commit()
-        return added
-    finally:
-        conn.close()
-
-
-def get_queue_item(item_id):
-    conn = _connect()
-    try:
-        row = conn.execute("SELECT * FROM queue_items WHERE id = ?", (item_id,)).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def remove_queue_item(item_id):
-    conn = _connect()
-    try:
-        conn.execute("DELETE FROM queue_items WHERE id = ?", (item_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def clear_queue(only_finished=False):
-    conn = _connect()
-    try:
-        if only_finished:
-            conn.execute("DELETE FROM queue_items WHERE status IN ('in_stock', 'empty_confirmed', 'not_found', 'already_off')")
+    ok       - stock in its pick slot
+    reserve  - pick slot empty, stock in reserve/overflow (picker must be sent there)
+    out      - no stock anywhere, but still on in the route program
+    off      - turned off in the route program (will ship short)
+    """
+    rows = conn.execute(
+        """SELECT p.id, p.is_active,
+                  COALESCE(SUM(CASE WHEN l.type = 'pick' THEN i.quantity END), 0) AS pick_qty,
+                  COALESCE(SUM(CASE WHEN l.type != 'pick' THEN i.quantity END), 0) AS other_qty
+           FROM products p
+           LEFT JOIN inventory i ON i.product_id = p.id
+           LEFT JOIN locations l ON l.id = i.location_id
+           GROUP BY p.id"""
+    ).fetchall()
+    status = {}
+    for r in rows:
+        if not r["is_active"]:
+            status[r["id"]] = "off"
+        elif r["pick_qty"] > 0:
+            status[r["id"]] = "ok"
+        elif r["other_qty"] > 0:
+            status[r["id"]] = "reserve"
         else:
-            conn.execute("DELETE FROM queue_items")
-        conn.commit()
+            status[r["id"]] = "out"
+    return status
+
+
+def list_routes():
+    """Tomorrow's trucks with stop, line and case totals and how many lines need attention."""
+    conn = _connect()
+    try:
+        status = _product_pick_status(conn)
+        routes = [dict(r) for r in conn.execute("SELECT * FROM routes ORDER BY departs_at")]
+        lines = conn.execute(
+            """SELECT s.route_id, s.id AS store_id, ol.product_id, ol.cases
+               FROM order_lines ol JOIN stores s ON s.id = ol.store_id"""
+        ).fetchall()
     finally:
         conn.close()
+    by_route = {r["id"]: r for r in routes}
+    for r in routes:
+        r.update(stops=set(), lines=0, cases=0, short_lines=0, reserve_lines=0)
+    for ln in lines:
+        r = by_route[ln["route_id"]]
+        r["stops"].add(ln["store_id"])
+        r["lines"] += 1
+        r["cases"] += ln["cases"]
+        st = status[ln["product_id"]]
+        r["short_lines"] += st in ("off", "out")
+        r["reserve_lines"] += st == "reserve"
+    for r in routes:
+        r["stops"] = len(r["stops"])
+    return routes
+
+
+def route_detail(route_id):
+    """One truck: its stops in delivery order, and every line on each store's order."""
+    conn = _connect()
+    try:
+        route = conn.execute("SELECT * FROM routes WHERE id = ?", (route_id,)).fetchone()
+        if route is None:
+            return None
+        status = _product_pick_status(conn)
+        stores = [dict(s) for s in conn.execute(
+            "SELECT id, stop_number, name, address, order_number FROM stores WHERE route_id = ? ORDER BY stop_number",
+            (route_id,))]
+        lines = conn.execute(
+            """SELECT ol.store_id, ol.cases, p.id AS product_id, p.route_code, p.name, p.pack_size
+               FROM order_lines ol
+               JOIN stores s ON s.id = ol.store_id
+               JOIN products p ON p.id = ol.product_id
+               WHERE s.route_id = ?
+               ORDER BY p.name, p.pack_size""",
+            (route_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    by_store = {s["id"]: dict(s, lines=[], cases=0, short_lines=0) for s in stores}
+    for ln in lines:
+        s = by_store[ln["store_id"]]
+        line = dict(ln, status=status[ln["product_id"]])
+        del line["store_id"]
+        s["lines"].append(line)
+        s["cases"] += ln["cases"]
+        s["short_lines"] += line["status"] in ("off", "out")
+    return {"route": dict(route), "stores": list(by_store.values())}

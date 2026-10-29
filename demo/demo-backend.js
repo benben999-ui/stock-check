@@ -40,7 +40,6 @@
         product_id: c.product_id,
         result: c.result,
         action: c.action,
-        queue_item_id: null,
       }));
     return {
       version: SEED.version,
@@ -54,10 +53,10 @@
       inventory: SEED.inventory.map(([product_id, location_id, quantity]) => ({ product_id, location_id, quantity })),
       routes: SEED.routes.map((r) => ({ ...r, departs_at: fmt(at(r.depart_day, r.depart_time)) })),
       route_items: SEED.route_items.map(([route_id, product_id, cases]) => ({ route_id, product_id, cases })),
+      stores: SEED.stores.map(([id, route_id, stop_number, name, address, order_number]) => ({ id, route_id, stop_number, name, address, order_number })),
+      order_lines: SEED.order_lines.map(([store_id, product_id, cases]) => ({ store_id, product_id, cases })),
       checks,
-      queue: [],
       nextCheckId: checks.length + 1,
-      nextQueueId: 1,
       welcomed: false,
     };
   }
@@ -109,7 +108,7 @@
       .filter((ri) => ri.product_id === product.id)
       .map((ri) => {
         const r = state.routes.find((x) => x.id === ri.route_id);
-        return { route_number: r.route_number, truck_type: r.truck_type, truck_number: r.truck_number, destination: r.destination, departs_at: r.departs_at, cases: ri.cases };
+        return { id: r.id, route_number: r.route_number, truck_type: r.truck_type, truck_number: r.truck_number, destination: r.destination, departs_at: r.departs_at, cases: ri.cases };
       })
       .sort((a, b) => (a.departs_at < b.departs_at ? -1 : 1));
 
@@ -124,38 +123,28 @@
 
   // ------------------------------------------------------------------ log & actions
   const RESULT_LABELS = { IN_STOCK: 'IN STOCK', OUT_OF_STOCK: 'OUT OF STOCK', NOT_FOUND: 'NOT FOUND', ALREADY_OFF: 'ALREADY OFF' };
-  const QUEUE_STATUS = { IN_STOCK: 'in_stock', OUT_OF_STOCK: 'out_of_stock', NOT_FOUND: 'not_found', ALREADY_OFF: 'already_off' };
   const INITIAL_ACTION = { IN_STOCK: 'Location shown', OUT_OF_STOCK: 'Awaiting decision', NOT_FOUND: 'Code not found', ALREADY_OFF: 'Already turned off' };
 
-  function startCheck(result, queueId) {
+  function startCheck(result) {
     const now = nowStr();
     const finished = result.outcome === 'NOT_FOUND' || result.outcome === 'ALREADY_OFF';
-    const productId = result.product ? result.product.id : null;
     const check = {
       id: state.nextCheckId++, started_at: now, completed_at: finished ? now : null, seconds: finished ? 0 : null,
-      code_entered: result.code, product_id: productId, result: RESULT_LABELS[result.outcome],
-      action: INITIAL_ACTION[result.outcome], queue_item_id: queueId || null,
+      code_entered: result.code, product_id: result.product ? result.product.id : null,
+      result: RESULT_LABELS[result.outcome], action: INITIAL_ACTION[result.outcome],
     };
     state.checks.push(check);
-    const q = queueId && state.queue.find((x) => x.id === queueId);
-    if (q) Object.assign(q, { status: QUEUE_STATUS[result.outcome], product_id: productId, check_id: check.id, updated_at: now });
     return check.id;
   }
 
   function finishCheck(checkId, action, complete = true) {
     const c = state.checks.find((x) => x.id === checkId);
-    if (!c) return null;
+    if (!c) return;
     c.action = action;
     if (complete) {
       c.completed_at = nowStr();
       c.seconds = Math.round((Date.now() - parse(c.started_at)) / 1000);
     }
-    return c.queue_item_id;
-  }
-
-  function setQueueStatus(queueId, status) {
-    const q = queueId && state.queue.find((x) => x.id === queueId);
-    if (q) Object.assign(q, { status, updated_at: nowStr() });
   }
 
   function turnOn(productId) {
@@ -166,7 +155,7 @@
     const now = nowStr();
     state.checks.push({
       id: state.nextCheckId++, started_at: now, completed_at: now, seconds: null, code_entered: p.route_code,
-      product_id: p.id, result: 'TURNED ON', action: 'Turned back on (delivery arrived)', queue_item_id: null,
+      product_id: p.id, result: 'TURNED ON', action: 'Turned back on (delivery arrived)',
     });
     return true;
   }
@@ -225,26 +214,60 @@
       shift_start_hour: ss, shift_end_hour: SEED.shift_end, current_hour: new Date().getHours() };
   }
 
-  // ------------------------------------------------------------------ queue
-  function listQueue() {
-    return state.queue.map((q) => {
-      const p = productById(q.product_id) || {};
-      return { id: q.id, code: q.code, status: q.status, added_at: q.added_at, updated_at: q.updated_at, check_id: q.check_id || null,
-        name: p.name || null, pack_size: p.pack_size || null };
+  // ------------------------------------------------------------------ truck routes (same rules as repository.py)
+  function productPickStatus() {
+    const status = {};
+    state.products.forEach((p) => {
+      const stock = state.inventory.filter((i) => i.product_id === p.id);
+      const pick = stock.filter((i) => state.locations[i.location_id] === 'pick').reduce((n, i) => n + i.quantity, 0);
+      const other = stock.filter((i) => state.locations[i.location_id] !== 'pick').reduce((n, i) => n + i.quantity, 0);
+      status[p.id] = !p.is_active ? 'off' : pick > 0 ? 'ok' : other > 0 ? 'reserve' : 'out';
     });
+    return status;
   }
 
-  function addToQueue(codes) {
-    let added = 0;
-    const now = nowStr();
-    (codes || []).forEach((raw) => {
-      const code = normalize(raw);
-      if (!code) return;
-      const p = findInRouteProgram(code);
-      state.queue.push({ id: state.nextQueueId++, code, product_id: p ? p.id : null, status: 'pending', added_at: now, updated_at: now, check_id: null });
-      added++;
+  function listRoutes() {
+    const status = productPickStatus();
+    const storeRoute = Object.fromEntries(state.stores.map((s) => [s.id, s.route_id]));
+    const totals = {};
+    state.routes.forEach((r) => { totals[r.id] = { stops: new Set(), lines: 0, cases: 0, short_lines: 0, reserve_lines: 0 }; });
+    state.order_lines.forEach((ol) => {
+      const t = totals[storeRoute[ol.store_id]];
+      t.stops.add(ol.store_id);
+      t.lines += 1;
+      t.cases += ol.cases;
+      const st = status[ol.product_id];
+      if (st === 'off' || st === 'out') t.short_lines += 1;
+      if (st === 'reserve') t.reserve_lines += 1;
     });
-    return added;
+    return state.routes
+      .slice()
+      .sort((a, b) => (a.departs_at < b.departs_at ? -1 : 1))
+      .map((r) => ({ ...r, ...totals[r.id], stops: totals[r.id].stops.size }));
+  }
+
+  function routeDetail(routeId) {
+    const route = state.routes.find((r) => r.id === routeId);
+    if (!route) return null;
+    const status = productPickStatus();
+    const stores = state.stores
+      .filter((s) => s.route_id === routeId)
+      .sort((a, b) => a.stop_number - b.stop_number)
+      .map((s) => {
+        const lines = state.order_lines
+          .filter((ol) => ol.store_id === s.id)
+          .map((ol) => {
+            const p = productById(ol.product_id);
+            return { cases: ol.cases, product_id: p.id, route_code: p.route_code, name: p.name, pack_size: p.pack_size, status: status[p.id] };
+          })
+          .sort((a, b) => (a.name + a.pack_size).localeCompare(b.name + b.pack_size));
+        return {
+          id: s.id, stop_number: s.stop_number, name: s.name, address: s.address, order_number: s.order_number, lines,
+          cases: lines.reduce((n, l) => n + l.cases, 0),
+          short_lines: lines.filter((l) => l.status === 'off' || l.status === 'out').length,
+        };
+      });
+    return { route, stores };
   }
 
   // ------------------------------------------------------------------ router (same paths as server.py)
@@ -256,38 +279,31 @@
     if (body === undefined) {
       if (url.pathname === '/api/lookup') {
         const result = lookup(q.code);
-        if (q.log !== '0') result.check_id = startCheck(result, q.queue_id ? Number(q.queue_id) : null);
+        result.check_id = startCheck(result);
         return result;
       }
       if (url.pathname === '/api/log') return activityLog(q.q);
       if (url.pathname === '/api/turned-off') return turnedOff();
       if (url.pathname === '/api/stats') return stats();
-      if (url.pathname === '/api/queue') return listQueue();
+      if (url.pathname === '/api/routes') return listRoutes();
+      if (parts[1] === 'routes' && parts.length === 3) {
+        const detail = routeDetail(Number(parts[2]));
+        if (detail) return detail;
+      }
     } else {
       if (parts[1] === 'checks' && parts.length === 4) {
         const id = Number(parts[2]);
         if (parts[3] === 'relayed') { finishCheck(id, `Sent picker to ${body.location || ''}`); return { ok: true }; }
-        if (parts[3] === 'empty-slot') { setQueueStatus(finishCheck(id, 'Turned off + EMPTY SLOT confirmed'), 'empty_confirmed'); return { ok: true }; }
+        if (parts[3] === 'empty-slot') { finishCheck(id, 'Turned off + EMPTY SLOT confirmed'); return { ok: true }; }
       }
       if (parts[1] === 'products' && parts.length === 4) {
         const id = Number(parts[2]);
         if (parts[3] === 'off') {
-          const p = productById(id);
-          Object.assign(p, { is_active: 0, turned_off_at: nowStr() });
-          if (body.check_id) setQueueStatus(finishCheck(body.check_id, 'Turned off - waiting for EMPTY SLOT', false), 'turned_off');
+          Object.assign(productById(id), { is_active: 0, turned_off_at: nowStr() });
+          if (body.check_id) finishCheck(body.check_id, 'Turned off - waiting for EMPTY SLOT', false);
           return { ok: true };
         }
         if (parts[3] === 'on') { turnOn(id); return { ok: true }; }
-      }
-      if (url.pathname === '/api/queue') { const added = addToQueue(body.codes); return { added, items: listQueue() }; }
-      if (url.pathname === '/api/queue/clear') {
-        const done = ['in_stock', 'empty_confirmed', 'not_found', 'already_off'];
-        state.queue = body.only_finished ? state.queue.filter((x) => !done.includes(x.status)) : [];
-        return listQueue();
-      }
-      if (parts[1] === 'queue' && parts[3] === 'remove') {
-        state.queue = state.queue.filter((x) => x.id !== Number(parts[2]));
-        return listQueue();
       }
     }
     throw new Error('Not found: ' + url.pathname);

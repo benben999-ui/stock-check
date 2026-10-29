@@ -32,9 +32,9 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M8 8v8M11 8v8M14 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           <span>Check</span><span class="nav-count"><kbd>F1</kbd></span>
         </button>
-        <button class="tab" data-view="queue" data-label="Shift queue" role="tab">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Shift queue</span><span class="nav-count badge" id="queue-badge" hidden>0</span>
+        <button class="tab" data-view="routes" data-label="Truck routes" role="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 7h12v9H2zM14 10h4l3 3v3h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Truck routes</span><span class="nav-count" id="routes-count"></span>
         </button>
         <button class="tab" data-view="log" data-label="Activity log" role="tab">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -51,7 +51,7 @@
         <li><i class="dot dot-blue"></i>Checks<span id="ss-checks">–</span></li>
         <li><i class="dot dot-green"></i>Sent to stock<span id="ss-instock">–</span></li>
         <li><i class="dot dot-red"></i>Turned off now<span id="ss-off">–</span></li>
-        <li><i class="dot dot-amber"></i>Queue pending<span id="ss-queue">–</span></li>
+        <li><i class="dot dot-amber"></i>Lines shipping short<span id="ss-short">–</span></li>
       </ul>
 
       <div class="side-foot">Mock data only. Not connected to any company system.</div>
@@ -83,35 +83,20 @@
           </div>
         </section>
 
-        <!-- QUEUE ---------------------------------------------------------->
-        <section id="view-queue" class="view">
-          <h1 class="page-title">Shift queue <span class="dim" id="queue-title-count"></span></h1>
-          <div class="queue-layout">
-            <aside class="queue-panel">
-              <form id="queue-form" class="scan-form compact" autocomplete="off">
-                <label for="queue-input" class="scan-label">Add codes <span class="hint">Enter after each one</span></label>
-                <div class="scan-row">
-                  <input id="queue-input" class="scan-input" placeholder="Scan / type code" spellcheck="false">
-                  <button class="btn btn-primary" type="submit">Add</button>
-                </div>
-                <details class="paste-box">
-                  <summary>Paste a list of codes</summary>
-                  <textarea id="queue-paste" rows="4" placeholder="One code per line, or separated by commas"></textarea>
-                  <button class="btn" type="button" id="queue-paste-btn">Add all</button>
-                </details>
-              </form>
-              <div class="queue-summary" id="queue-summary"></div>
-              <ol id="queue-list" class="queue-list"></ol>
-              <div class="queue-actions">
-                <button class="btn btn-primary btn-lg" id="queue-next">Work next pending ▶</button>
-                <button class="btn" id="queue-clear-done">Clear finished</button>
-                <button class="btn btn-ghost" id="queue-clear-all">Clear all</button>
-              </div>
-            </aside>
-            <div id="queue-result" class="result-area">
-              <div class="empty-state">Add codes on the left, then press <b>Work next pending</b>.</div>
-            </div>
+        <!-- ROUTES --------------------------------------------------------->
+        <section id="view-routes" class="view">
+          <h1 class="page-title">Truck routes <span class="dim" id="routes-title-count"></span></h1>
+          <div class="routes-toolbar" id="routes-toolbar">
+            <input id="routes-search" class="search" placeholder="Search route, truck or area…" spellcheck="false" aria-label="Search routes">
+            <select id="routes-type" class="search select" aria-label="Truck type">
+              <option value="">All truck types</option>
+              <option>Route</option>
+              <option>Bulk</option>
+              <option>Transport</option>
+            </select>
+            <span class="muted routes-hint">Click a route to see its stores and orders.</span>
           </div>
+          <div id="routes-body"></div>
         </section>
 
         <!-- LOG ------------------------------------------------------------>
