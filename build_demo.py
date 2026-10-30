@@ -56,8 +56,15 @@ def export_seed():
     for r in conn.execute("SELECT * FROM routes ORDER BY id"):
         day, time = split(r["departs_at"])
         routes.append({"id": r["id"], "route_number": r["route_number"], "truck_type": r["truck_type"],
-                       "truck_number": r["truck_number"], "destination": r["destination"],
+                       "truck_number": r["truck_number"], "destination": r["destination"], "door": r["door"],
                        "depart_day": day, "depart_time": time})
+    order_lines = []
+    for ol in conn.execute("SELECT * FROM order_lines"):
+        # Pick times become "minutes before now" so the demo always looks like tonight's picking.
+        ago = (round((end_of_day - datetime.strptime(ol["picked_at"], "%Y-%m-%d %H:%M:%S")).total_seconds() / 60)
+               if ol["picked_at"] else None)
+        order_lines.append([ol["store_id"], ol["product_id"], ol["cases"], ol["zone"], ol["qty_picked"],
+                            ol["pick_status"], ol["picker"], ago])
     checks = []
     for c in conn.execute("SELECT * FROM checks ORDER BY started_at"):
         day, time = split(c["started_at"])
@@ -70,8 +77,8 @@ def export_seed():
         "routes": routes,
         "route_items": [list(row) for row in conn.execute("SELECT route_id, product_id, cases FROM route_items")],
         "stores": [list(row) for row in conn.execute(
-            "SELECT id, route_id, stop_number, name, address, order_number FROM stores ORDER BY id")],
-        "order_lines": [list(row) for row in conn.execute("SELECT store_id, product_id, cases FROM order_lines")],
+            "SELECT id, route_id, stop_number, name, address, order_number, sscc FROM stores ORDER BY id")],
+        "order_lines": order_lines,
         "checks": checks,
         "shift_start": seed_module.SHIFT_START_HOUR,
         "shift_end": seed_module.SHIFT_END_HOUR,
@@ -87,9 +94,11 @@ def build():
     fonts = re.search(r'<link rel="stylesheet" href="https://fonts\.googleapis\.com[^>]*>', index).group(0)
     body =re.search(r"<body>(.*)</body>", index, re.S).group(1)
     body = body.replace('<script src="app.js"></script>', "")
-    body = body.replace("<!--DEMO-INTRO-->", read(DEMO, "demo-intro.html"), 1)
+    seed = export_seed()
+    intro = read(DEMO, "demo-intro.html").replace("{{SAMPLE_PALLET}}", seed["stores"][0][6])
+    body = body.replace("<!--DEMO-INTRO-->", intro, 1)
 
-    seed_json = json.dumps(export_seed(), separators=(",", ":"))
+    seed_json = json.dumps(seed, separators=(",", ":"))
     scripts = "\n".join([
         f"<script>window.DEMO_SEED = {seed_json};</script>",
         f"<script>{read(DEMO, 'demo-backend.js')}</script>",

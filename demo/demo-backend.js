@@ -53,8 +53,12 @@
       inventory: SEED.inventory.map(([product_id, location_id, quantity]) => ({ product_id, location_id, quantity })),
       routes: SEED.routes.map((r) => ({ ...r, departs_at: fmt(at(r.depart_day, r.depart_time)) })),
       route_items: SEED.route_items.map(([route_id, product_id, cases]) => ({ route_id, product_id, cases })),
-      stores: SEED.stores.map(([id, route_id, stop_number, name, address, order_number]) => ({ id, route_id, stop_number, name, address, order_number })),
-      order_lines: SEED.order_lines.map(([store_id, product_id, cases]) => ({ store_id, product_id, cases })),
+      stores: SEED.stores.map(([id, route_id, stop_number, name, address, order_number, sscc]) => ({ id, route_id, stop_number, name, address, order_number, sscc })),
+      // Pick times are stored as "minutes before now" so the demo always looks like tonight's picking.
+      order_lines: SEED.order_lines.map(([store_id, product_id, cases, zone, qty_picked, pick_status, picker, minutesAgo]) => ({
+        store_id, product_id, cases, zone, qty_picked, pick_status, picker,
+        picked_at: minutesAgo == null ? null : fmt(new Date(now - minutesAgo * 60000)),
+      })),
       checks,
       nextCheckId: checks.length + 1,
       welcomed: false,
@@ -214,7 +218,7 @@
       shift_start_hour: ss, shift_end_hour: SEED.shift_end, current_hour: new Date().getHours() };
   }
 
-  // ------------------------------------------------------------------ truck routes (same rules as repository.py)
+  // ------------------------------------------------------------------ truck routes and picking (same rules as repository.py)
   function productPickStatus() {
     const status = {};
     state.products.forEach((p) => {
@@ -226,30 +230,45 @@
     return status;
   }
 
+  const SHORT = ['stockout', 'off', 'nostock'];
+  function lineStatus(pickStatus, stock) {
+    if (pickStatus === 'completed') return 'picked';
+    if (pickStatus === 'in_progress') return 'picking';
+    if (pickStatus === 'stockout') return 'stockout';
+    return { off: 'off', out: 'nostock', reserve: 'reserve', ok: 'ready' }[stock];
+  }
+
   function listRoutes() {
-    const status = productPickStatus();
+    const stock = productPickStatus();
     const storeRoute = Object.fromEntries(state.stores.map((s) => [s.id, s.route_id]));
     const totals = {};
-    state.routes.forEach((r) => { totals[r.id] = { stops: new Set(), lines: 0, cases: 0, short_lines: 0, reserve_lines: 0 }; });
+    state.routes.forEach((r) => {
+      totals[r.id] = { stops: new Set(), lines: 0, cases: 0, cases_picked: 0, short_lines: 0, reserve_lines: 0, stockout_lines: 0 };
+    });
     state.order_lines.forEach((ol) => {
       const t = totals[storeRoute[ol.store_id]];
       t.stops.add(ol.store_id);
       t.lines += 1;
       t.cases += ol.cases;
-      const st = status[ol.product_id];
-      if (st === 'off' || st === 'out') t.short_lines += 1;
+      t.cases_picked += ol.qty_picked;
+      const st = lineStatus(ol.pick_status, stock[ol.product_id]);
+      if (SHORT.includes(st)) t.short_lines += 1;
       if (st === 'reserve') t.reserve_lines += 1;
+      if (st === 'stockout') t.stockout_lines += 1;
     });
     return state.routes
       .slice()
       .sort((a, b) => (a.departs_at < b.departs_at ? -1 : 1))
-      .map((r) => ({ ...r, ...totals[r.id], stops: totals[r.id].stops.size }));
+      .map((r) => {
+        const t = totals[r.id];
+        return { ...r, ...t, stops: t.stops.size, pct_picked: t.cases ? Math.round((100 * t.cases_picked) / t.cases) : 0 };
+      });
   }
 
   function routeDetail(routeId) {
     const route = state.routes.find((r) => r.id === routeId);
     if (!route) return null;
-    const status = productPickStatus();
+    const stock = productPickStatus();
     const stores = state.stores
       .filter((s) => s.route_id === routeId)
       .sort((a, b) => a.stop_number - b.stop_number)
@@ -258,16 +277,73 @@
           .filter((ol) => ol.store_id === s.id)
           .map((ol) => {
             const p = productById(ol.product_id);
-            return { cases: ol.cases, product_id: p.id, route_code: p.route_code, name: p.name, pack_size: p.pack_size, status: status[p.id] };
+            return {
+              cases: ol.cases, zone: ol.zone, qty_picked: ol.qty_picked, pick_status: ol.pick_status, picker: ol.picker,
+              picked_at: ol.picked_at, product_id: p.id, route_code: p.route_code, name: p.name, pack_size: p.pack_size,
+              status: lineStatus(ol.pick_status, stock[p.id]),
+            };
           })
           .sort((a, b) => (a.name + a.pack_size).localeCompare(b.name + b.pack_size));
         return {
-          id: s.id, stop_number: s.stop_number, name: s.name, address: s.address, order_number: s.order_number, lines,
+          id: s.id, stop_number: s.stop_number, name: s.name, address: s.address, order_number: s.order_number, sscc: s.sscc, lines,
           cases: lines.reduce((n, l) => n + l.cases, 0),
-          short_lines: lines.filter((l) => l.status === 'off' || l.status === 'out').length,
+          cases_picked: lines.reduce((n, l) => n + l.qty_picked, 0),
+          short_lines: lines.filter((l) => SHORT.includes(l.status)).length,
         };
       });
     return { route, stores };
+  }
+
+  function pickProgress() {
+    const blank = (zone) => ({ zone, cases: 0, available: 0, in_progress: 0, picked: 0, stockout: 0, lines: 0 });
+    const zones = { BULK: blank('BULK'), LAYER: blank('LAYER'), FULL: blank('FULL') };
+    const total = blank('TOTAL');
+    state.order_lines.forEach((ol) => {
+      [zones[ol.zone], total].forEach((b) => {
+        b.cases += ol.cases;
+        b.lines += 1;
+        b.picked += ol.qty_picked;
+        if (ol.pick_status === 'available') b.available += ol.cases;
+        else if (ol.pick_status === 'in_progress') b.in_progress += ol.cases - ol.qty_picked;
+        else if (ol.pick_status === 'stockout') b.stockout += ol.cases;
+      });
+    });
+    [...Object.values(zones), total].forEach((b) => { b.pct_picked = b.cases ? Math.round((100 * b.picked) / b.cases) : 0; });
+    return { total, zones: Object.values(zones) };
+  }
+
+  function stockouts() {
+    const stock = productPickStatus();
+    const storeById = Object.fromEntries(state.stores.map((s) => [s.id, s]));
+    const routeById = Object.fromEntries(state.routes.map((r) => [r.id, r]));
+    const byProduct = {};
+    state.order_lines.filter((ol) => ol.pick_status === 'stockout').forEach((ol) => {
+      const p = productById(ol.product_id);
+      const item = (byProduct[p.id] = byProduct[p.id] || {
+        product_id: p.id, route_code: p.route_code, name: p.name, pack_size: p.pack_size, stock: stock[p.id],
+        stores: 0, cases_short: 0, routes: new Set(), last_reported: '', last_picker: null,
+      });
+      item.stores += 1;
+      item.cases_short += ol.cases;
+      item.routes.add(routeById[storeById[ol.store_id].route_id].route_number);
+      if ((ol.picked_at || '') > item.last_reported) { item.last_reported = ol.picked_at; item.last_picker = ol.picker; }
+    });
+    return Object.values(byProduct)
+      .sort((a, b) => b.cases_short - a.cases_short)
+      .map((i) => ({ ...i, routes: [...i.routes].sort() }));
+  }
+
+  function findPalletOrOrder(query) {
+    const q = (query || '').trim().toUpperCase().replace(/\s+/g, '');
+    let store;
+    if (q.startsWith('SO')) {
+      const number = 'SO-' + q.slice(2).replace(/^-/, '');
+      store = state.stores.find((s) => s.order_number === number);
+    } else {
+      const digits = q.replace(/\D/g, '');
+      if (digits.length >= 18) store = state.stores.find((s) => s.sscc === digits || s.sscc === '00' + digits);
+    }
+    return store ? { route_id: store.route_id, store_id: store.id } : null;
   }
 
   // ------------------------------------------------------------------ router (same paths as server.py)
@@ -286,6 +362,13 @@
       if (url.pathname === '/api/turned-off') return turnedOff();
       if (url.pathname === '/api/stats') return stats();
       if (url.pathname === '/api/routes') return listRoutes();
+      if (url.pathname === '/api/progress') return pickProgress();
+      if (url.pathname === '/api/stockouts') return stockouts();
+      if (url.pathname === '/api/find') {
+        const found = findPalletOrOrder(q.q);
+        if (found) return found;
+        throw new Error('No pallet or order found');
+      }
       if (parts[1] === 'routes' && parts.length === 3) {
         const detail = routeDetail(Number(parts[2]));
         if (detail) return detail;

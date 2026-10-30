@@ -11,12 +11,25 @@ const ICON = {
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
-// Where a line on a store's order can be picked from right now.
+// A line on a store's order: where it is in picking, or where it can be picked from.
 const LINE_STATUS = {
-  ok:      { label: 'In pick slot',      cls: 'good', icon: 'check' },
-  reserve: { label: 'Pick from reserve', cls: 'info', icon: 'arrow' },
-  out:     { label: 'No stock',          cls: 'bad',  icon: 'x' },
-  off:     { label: 'Turned off',        cls: 'bad',  icon: 'power' },
+  picked:   { label: 'Picked',            cls: 'good',    icon: 'check' },
+  picking:  { label: 'Picking now',       cls: 'info',    icon: 'clock' },
+  stockout: { label: 'Stockout',          cls: 'bad',     icon: 'x' },
+  off:      { label: 'Turned off',        cls: 'bad',     icon: 'power' },
+  nostock:  { label: 'No stock',          cls: 'bad',     icon: 'x' },
+  reserve:  { label: 'Pick from reserve', cls: 'warn',    icon: 'arrow' },
+  ready:    { label: 'Ready to pick',     cls: 'neutral', icon: 'clock' },
+};
+const SHORT_STATUSES = ['stockout', 'off', 'nostock'];
+const CALM_STATUSES = ['picked', 'picking', 'ready'];
+
+// What a product can be picked from right now (for the stockout list).
+const STOCK_STATUS = {
+  ok:      { label: 'Back in pick slot',      cls: 'good', icon: 'check' },
+  reserve: { label: 'In reserve: send picker', cls: 'warn', icon: 'arrow' },
+  out:     { label: 'No stock: needs turn-off', cls: 'bad', icon: 'x' },
+  off:     { label: 'Turned off',             cls: 'neutral', icon: 'power' },
 };
 
 const RESULT_PILL = {
@@ -169,9 +182,9 @@ function verdictHtml(cls, icon, title, sub) {
 function detailsHtml(d) {
   const p = d.product;
   const routes = d.routes.length
-    ? `<table class="table"><thead><tr><th>Route</th><th>Truck</th><th>Destination</th><th>Departs</th><th class="num">Cases</th></tr></thead><tbody>
+    ? `<table class="table"><thead><tr><th>Route</th><th>Truck</th><th>Door</th><th>Destination</th><th>Departs</th><th class="num">Cases</th></tr></thead><tbody>
         ${d.routes.map((r) => `<tr><td class="truck"><button class="code-link" data-open-route="${r.id}" title="Open route ${esc(r.route_number)}">${esc(r.route_number)}</button></td><td>${esc(r.truck_type)} · ${esc(r.truck_number)}</td>
-          <td>${esc(r.destination)}</td><td>${timeOf(r.departs_at)}</td><td class="num">${r.cases}</td></tr>`).join('')}
+          <td>${esc(r.door || '')}</td><td>${esc(r.destination)}</td><td>${timeOf(r.departs_at)}</td><td class="num">${r.cases}</td></tr>`).join('')}
       </tbody></table>`
     : '<p class="muted">Not on any of tomorrow\'s routes.</p>';
   const stock = `<table class="table"><thead><tr><th>Location</th><th>Type</th><th class="num">Cases</th></tr></thead><tbody>
@@ -254,10 +267,7 @@ function renderResult(container, data, stage) {
 
   function bind() {
     container.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => act(b.dataset.act)));
-    container.querySelectorAll('[data-open-route]').forEach((b) => b.addEventListener('click', () => {
-      showView('routes');
-      openRoute(Number(b.dataset.openRoute));
-    }));
+    container.querySelectorAll('[data-open-route]').forEach((b) => b.addEventListener('click', () => goToRoute(Number(b.dataset.openRoute))));
     const focusTarget = container.querySelector('[data-act="empty"]');
     // Wait a tick so the confirm dialog's own focus handling has finished.
     if (focusTarget) setTimeout(() => focusTarget.isConnected && focusTarget.focus(), 0);
@@ -314,6 +324,17 @@ $('#check-form').addEventListener('submit', async (e) => {
   if (!code) return;
   input.value = '';
   await flushPendingRelay();
+  // A pallet label (SSCC barcode) or store order number opens that store's stop on its truck.
+  if (/^\d{18,20}$/.test(code.replace(/\s/g, '')) || /^SO-?\d{6}$/i.test(code)) {
+    try {
+      const found = await api(`/api/find?q=${encodeURIComponent(code)}`);
+      goToRoute(found.route_id, found.store_id);
+    } catch (_) {
+      $('#check-result').innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'NOT FOUND',
+        `No pallet or store order matches <span class="mono">${esc(code)}</span>.`)}</div>`;
+    }
+    return;
+  }
   try {
     const data = await api(`/api/lookup?code=${encodeURIComponent(code)}`);
     if (data.outcome === 'IN_STOCK') pendingRelay = { check_id: data.check_id, location: sendToText(data) };
@@ -326,35 +347,99 @@ $('#check-form').addEventListener('submit', async (e) => {
 $('#check-input').addEventListener('keydown', (e) => { if (e.key === 'Escape') e.target.value = ''; });
 
 // ---------------------------------------------------------------- ROUTES view
-// Tomorrow's trucks. Click one to see each store stop and what that store ordered.
+// Tonight's picking for tomorrow's trucks: an overview (progress by zone, stockouts pickers
+// reported), then the trucks. Click a truck to see each store stop and what that store ordered.
 let routesCache = [];
+let progressCache = null;
+let stockoutsCache = [];
 let currentRouteId = null;
 let routeDetailCache = null;
+let highlightStoreId = null;
 
-// Run a full stock check on a code from anywhere (route detail, demo intro).
+// Run a full stock check on a code from anywhere (route detail, stockout list, demo intro).
 function checkCode(code) {
   showView('check');
   $('#check-input').value = code;
   $('#check-form').requestSubmit();
 }
 
+// Open one truck (optionally scrolling to one of its stops) from anywhere in the app.
+function goToRoute(routeId, storeId = null) {
+  currentRouteId = routeId;
+  highlightStoreId = storeId;
+  showView('routes');
+}
+
 async function loadRoutes() {
-  routesCache = await api('/api/routes');
+  [routesCache, progressCache, stockoutsCache] = await Promise.all([
+    api('/api/routes'), api('/api/progress'), api('/api/stockouts'),
+  ]);
   updateRoutesTitle();
-  if (currentRouteId) await openRoute(currentRouteId, { keepScroll: true });
+  if (currentRouteId) await openRoute(currentRouteId, { keepScroll: !highlightStoreId });
   else renderRouteList();
 }
 
 function updateRoutesTitle() {
-  const shorts = routesCache.reduce((n, r) => n + r.short_lines, 0);
-  $('#routes-title-count').textContent = `${routesCache.length} trucks${shorts ? ` · ${shorts} short lines` : ''}`;
+  $('#routes-title-count').textContent = `${routesCache.length} trucks · ${progressCache.total.pct_picked}% picked`;
 }
+
+const bar = (pct) => `<span class="bar" aria-hidden="true"><i style="width:${Math.min(100, pct)}%"></i></span>`;
+const palletLabel = (sscc) => (sscc ? `${sscc.slice(0, 2)} ${sscc.slice(2)}` : '');
 
 function attentionPills(shortLines, reserveLines) {
   const out = [];
   if (shortLines) out.push(pill('bad', 'x', `${shortLines} short`));
-  if (reserveLines) out.push(pill('info', 'arrow', `${reserveLines} from reserve`));
-  return out.length ? out.join(' ') : pill('good', 'check', 'All in pick slots');
+  if (reserveLines) out.push(pill('warn', 'arrow', `${reserveLines} from reserve`));
+  return out.length ? out.join(' ') : pill('good', 'check', 'Nothing short');
+}
+
+function overviewHtml() {
+  const t = progressCache.total;
+  const shortLines = routesCache.reduce((n, r) => n + r.short_lines, 0);
+  const needCheck = stockoutsCache.filter((s) => s.stock !== 'off').length;
+  const tiles = [
+    ['Cases picked', `${t.pct_picked}%`, `${t.picked.toLocaleString()} of ${t.cases.toLocaleString()} cases`],
+    ['Cases left to pick', (t.available + t.in_progress).toLocaleString(), `${t.in_progress.toLocaleString()} being picked now`],
+    ['Stockouts reported', stockoutsCache.length, `${needCheck} product${needCheck === 1 ? '' : 's'} still need a check`],
+    ['Lines shipping short', shortLines, 'Stockouts, no stock, or turned off'],
+  ].map(([label, value, sub]) => `<div class="tile"><div class="tile-label">${label}</div><div class="tile-value">${value}</div><div class="tile-sub">${sub}</div></div>`).join('');
+
+  const zoneRow = (z, cls = '') => `<tr class="${cls}"><td><b>${z.zone}</b></td>
+      <td class="num">${z.cases.toLocaleString()}</td><td class="num">${z.available.toLocaleString()}</td>
+      <td class="num">${z.in_progress.toLocaleString()}</td><td class="num">${z.picked.toLocaleString()}</td>
+      <td class="pct-cell">${bar(z.pct_picked)}<span class="mono">${z.pct_picked}%</span></td>
+      <td class="num">${z.stockout ? `<span class="bad-text">${z.stockout.toLocaleString()}</span>` : '0'}</td></tr>`;
+
+  const stockoutRows = stockoutsCache.map((s) => {
+    const st = STOCK_STATUS[s.stock];
+    return `<tr>
+      <td><b>${esc(s.name)}</b> <span class="muted">${esc(s.pack_size)}</span></td>
+      <td><button class="code-link" data-code="${esc(s.route_code)}" title="Run a stock check on ${esc(s.route_code)}">${esc(s.route_code)}</button></td>
+      <td class="num">${s.stores}</td><td class="num">${s.cases_short}</td>
+      <td class="mono routes-cell" title="${esc(s.routes.join(', '))}">${s.routes.slice(0, 3).map(esc).join(', ')}${s.routes.length > 3 ? ` <span class="muted">+${s.routes.length - 3}</span>` : ''}</td>
+      <td>${pill(st.cls, st.icon, st.label)}</td>
+      <td class="muted">${s.last_reported ? whenOf(s.last_reported) : ''}${s.last_picker ? ` · <span class="mono">${esc(s.last_picker)}</span>` : ''}</td></tr>`;
+  }).join('');
+
+  return `
+    <div class="tiles">${tiles}</div>
+    <div class="overview-grid">
+      <div class="card">
+        <div class="card-head"><div><h2>Pick progress by zone</h2><div class="muted card-sub">Cases on tomorrow's trucks</div></div></div>
+        <div class="table-wrap"><table class="table zone-table">
+          <thead><tr><th>Zone</th><th class="num">Cases</th><th class="num">Available</th><th class="num">In progress</th>
+            <th class="num">Picked</th><th>% picked</th><th class="num">Stockout</th></tr></thead>
+          <tbody>${zoneRow(t, 'total-row')}${progressCache.zones.map((z) => zoneRow(z)).join('')}</tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2>Stockouts reported by pickers</h2>
+          <div class="muted card-sub">Each one is a picker who found an empty slot. Click a code to check it.</div></div></div>
+        ${stockoutsCache.length ? `<div class="table-wrap"><table class="table stockout-table">
+          <thead><tr><th>Product</th><th>Code</th><th class="num">Stores</th><th class="num">Cases short</th><th>Routes</th><th>Stock now</th><th>Last report</th></tr></thead>
+          <tbody>${stockoutRows}</tbody></table></div>` : '<p class="muted">No stockouts reported tonight.</p>'}
+      </div>
+    </div>`;
 }
 
 function renderRouteList() {
@@ -362,23 +447,27 @@ function renderRouteList() {
   const q = $('#routes-search').value.trim().toLowerCase();
   const type = $('#routes-type').value;
   const rows = routesCache.filter((r) => (!type || r.truck_type === type) &&
-    (!q || [r.route_number, r.truck_number, r.destination].some((v) => v.toLowerCase().includes(q))));
+    (!q || [r.route_number, r.truck_number, r.destination, r.door || ''].some((v) => v.toLowerCase().includes(q))));
+  $('#routes-overview').innerHTML = overviewHtml();
+  $('#routes-overview').hidden = false;
   $('#routes-toolbar').hidden = false;
   $('#routes-body').innerHTML = `
     <div class="card">
       <div class="table-wrap">
         <table class="table route-table">
-          <thead><tr><th>Route</th><th>Truck</th><th>Destination</th><th>Departs</th>
-            <th class="num">Stops</th><th class="num">Lines</th><th class="num">Cases</th><th>Needs attention</th></tr></thead>
+          <thead><tr><th>Route</th><th>Truck</th><th>Door</th><th>Destination</th><th>Departs</th>
+            <th class="num">Stops</th><th class="num">Cases</th><th>Picked</th><th>Needs attention</th></tr></thead>
           <tbody>
             ${rows.map((r) => `<tr class="route-row" data-route="${r.id}" tabindex="0" role="button" aria-label="Open route ${esc(r.route_number)}">
               <td class="truck">${esc(r.route_number)}</td>
               <td>${esc(r.truck_type)} · <span class="mono">${esc(r.truck_number)}</span></td>
+              <td class="mono">${esc(r.door || '')}</td>
               <td>${esc(r.destination)}</td>
               <td class="mono">${timeOf(r.departs_at)}</td>
-              <td class="num">${r.stops}</td><td class="num">${r.lines}</td><td class="num">${r.cases}</td>
+              <td class="num">${r.stops}</td><td class="num">${r.cases}</td>
+              <td class="pct-cell">${bar(r.pct_picked)}<span class="mono">${r.pct_picked}%</span></td>
               <td>${attentionPills(r.short_lines, r.reserve_lines)}</td></tr>`).join('')
-              || '<tr><td colspan="8" class="muted">No routes match.</td></tr>'}
+              || '<tr><td colspan="9" class="muted">No routes match.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -389,17 +478,22 @@ async function openRoute(id, opts = {}) {
   currentRouteId = id;
   routeDetailCache = await api(`/api/routes/${id}`);
   renderRouteDetail();
-  if (!opts.keepScroll) window.scrollTo({ top: 0 });
+  const target = highlightStoreId && document.querySelector(`.stop-card[data-store="${highlightStoreId}"]`);
+  if (target) target.scrollIntoView({ block: 'start' });
+  else if (!opts.keepScroll) window.scrollTo({ top: 0 });
 }
 
 function renderRouteDetail() {
   const { route, stores } = routeDetailCache;
   const onlyAttention = $('#routes-attention') && $('#routes-attention').checked;
-  const lines = stores.reduce((n, s) => n + s.lines.length, 0);
+  const all = stores.flatMap((s) => s.lines);
   const cases = stores.reduce((n, s) => n + s.cases, 0);
-  const shortLines = stores.reduce((n, s) => n + s.short_lines, 0);
-  const reserveLines = stores.reduce((n, s) => n + s.lines.filter((l) => l.status === 'reserve').length, 0);
+  const picked = stores.reduce((n, s) => n + s.cases_picked, 0);
+  const pct = cases ? Math.round((100 * picked) / cases) : 0;
+  const shortLines = all.filter((l) => SHORT_STATUSES.includes(l.status)).length;
+  const reserveLines = all.filter((l) => l.status === 'reserve').length;
 
+  $('#routes-overview').hidden = true;
   $('#routes-toolbar').hidden = true;
   $('#routes-body').innerHTML = `
     <button class="btn btn-ghost back-btn" data-back>← All routes</button>
@@ -410,44 +504,49 @@ function renderRouteDetail() {
         <div class="muted">${esc(route.truck_type)} · truck <span class="mono">${esc(route.truck_number)}</span> · ${esc(route.destination)}</div>
       </div>
       <div class="route-facts">
+        <div><div class="card-label">Door</div><div class="fact mono">${esc(route.door || '')}</div></div>
         <div><div class="card-label">Departs</div><div class="fact mono">${timeOf(route.departs_at)}</div></div>
         <div><div class="card-label">Stops</div><div class="fact">${stores.length}</div></div>
-        <div><div class="card-label">Lines</div><div class="fact">${lines}</div></div>
         <div><div class="card-label">Cases</div><div class="fact">${cases}</div></div>
+        <div><div class="card-label">Picked</div><div class="fact">${pct}%</div>${bar(pct)}</div>
       </div>
       <div class="route-attention">${attentionPills(shortLines, reserveLines)}
         <label class="toggle"><input type="checkbox" id="routes-attention" ${onlyAttention ? 'checked' : ''}> Only lines that need attention</label>
       </div>
     </div>
     ${stores.map((s) => {
-      const shown = onlyAttention ? s.lines.filter((l) => l.status !== 'ok') : s.lines;
-      return `<div class="card stop-card">
+      const shown = onlyAttention ? s.lines.filter((l) => !CALM_STATUSES.includes(l.status)) : s.lines;
+      return `<div class="card stop-card ${s.id === highlightStoreId ? 'highlight-stop' : ''}" data-store="${s.id}">
         <div class="stop-head">
           <span class="stop-num" aria-label="Stop ${s.stop_number}">${s.stop_number}</span>
           <div class="stop-info">
             <div class="stop-name">${esc(s.name)}</div>
             <div class="muted">${esc(s.address)} · Order <span class="mono">${esc(s.order_number)}</span></div>
+            <div class="pallet">Pallet <span class="mono">${esc(palletLabel(s.sscc))}</span></div>
           </div>
-          <div class="stop-totals"><span class="mono">${s.lines.length} lines · ${s.cases} cs</span>
+          <div class="stop-totals"><span class="mono">${s.lines.length} lines · ${s.cases_picked}/${s.cases} cs picked</span>
             ${s.short_lines ? pill('bad', 'x', `${s.short_lines} short`) : ''}</div>
         </div>
-        ${shown.length ? `<div class="table-wrap"><table class="table">
-          <thead><tr><th>Product</th><th>Code</th><th class="num">Cases</th><th>Pick status</th></tr></thead>
+        ${shown.length ? `<div class="table-wrap"><table class="table line-table">
+          <thead><tr><th>Product</th><th>Code</th><th>Zone</th><th class="num">Picked / Req</th><th>Status</th><th>Picker</th></tr></thead>
           <tbody>${shown.map((l) => {
             const st = LINE_STATUS[l.status];
-            return `<tr class="${l.status === 'off' || l.status === 'out' ? 'short' : ''}">
+            return `<tr class="${SHORT_STATUSES.includes(l.status) ? 'short' : ''}">
               <td><b>${esc(l.name)}</b> <span class="muted">${esc(l.pack_size)}</span></td>
               <td><button class="code-link" data-code="${esc(l.route_code)}" title="Run a stock check on ${esc(l.route_code)}">${esc(l.route_code)}</button></td>
-              <td class="num">${l.cases}</td>
-              <td>${pill(st.cls, st.icon, st.label)}</td></tr>`;
+              <td class="mono zone">${esc(l.zone)}</td>
+              <td class="num">${l.qty_picked} / ${l.cases}</td>
+              <td>${pill(st.cls, st.icon, st.label)}</td>
+              <td class="muted picker">${l.picker ? `<span class="mono">${esc(l.picker)}</span> · ${timeOf(l.picked_at)}` : ''}</td></tr>`;
           }).join('')}</tbody></table></div>`
-          : '<p class="muted stop-empty">Every line on this order is in its pick slot.</p>'}
+          : '<p class="muted stop-empty">Nothing on this order needs attention.</p>'}
       </div>`;
     }).join('')}`;
+  highlightStoreId = null;
 }
 
-$('#routes-body').addEventListener('click', (e) => {
-  if (e.target.closest('[data-back]')) { renderRouteList(); return; }
+$('#view-routes').addEventListener('click', (e) => {
+  if (e.target.closest('[data-back]')) { renderRouteList(); window.scrollTo({ top: 0 }); return; }
   const code = e.target.closest('[data-code]');
   if (code) { checkCode(code.dataset.code); return; }
   const row = e.target.closest('[data-route]');

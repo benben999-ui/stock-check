@@ -348,6 +348,29 @@ main {
 .stop-empty { margin: 4px 0 0; font-size: .9rem; }
 .table tr.short td { background: var(--bad-soft); }
 
+/* overview: progress by zone + stockouts */
+#routes-overview[hidden] { display: none; }
+.overview-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
+@media (min-width: 1900px) { .overview-grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 18px; align-items: start; } }
+.card-sub { font-size: .82rem; margin-top: 2px; }
+.zone-table tr.total-row td { background: var(--warn-soft); color: var(--ink); }
+.bad-text { color: var(--bad); }
+.pct-cell { white-space: nowrap; }
+.pct-cell .mono { margin-left: 8px; font-size: .85rem; color: var(--ink-2); }
+.bar { display: inline-block; width: 70px; height: 6px; border-radius: 99px; background: var(--panel-3); overflow: hidden; vertical-align: middle; }
+.bar i { display: block; height: 100%; background: var(--good); border-radius: 99px; box-shadow: 0 0 8px var(--good-soft); }
+.route-facts .bar { width: 64px; margin-top: 6px; }
+.routes-cell { font-size: .8rem; white-space: nowrap; }
+.stockout-table td { vertical-align: middle; }
+.stockout-table td:last-child, .route-table td.mono { white-space: nowrap; }
+
+/* route detail extras */
+.pallet { font-size: .78rem; color: var(--faint); margin-top: 2px; }
+.pallet .mono { color: var(--muted); letter-spacing: .03em; }
+.stop-card.highlight-stop { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-ring), var(--shadow); }
+.line-table td.zone { font-size: .78rem; color: var(--muted); }
+.line-table td.picker { font-size: .8rem; white-space: nowrap; }
+
 .code-link {
   font: 500 .9rem var(--font-mono); color: var(--ink); background: none; border: none; padding: 0; cursor: pointer; white-space: nowrap;
   text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
@@ -506,14 +529,16 @@ main {
   .stop-card { padding: 14px; }
   /* Order lines become small stacked rows on a phone. */
   .stop-card thead { display: none; }
-  .stop-card tbody tr { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 6px 14px; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+  .stop-card tbody tr { display: grid; grid-template-columns: auto auto auto 1fr; align-items: center; gap: 6px 12px; padding: 10px 8px; border-bottom: 1px solid var(--line); }
   .stop-card tbody tr:last-child { border-bottom: none; }
   .stop-card tbody tr.short { background: var(--bad-soft); border-radius: 8px; }
   .stop-card tbody td { border: none; padding: 0; background: none !important; }
   .stop-card tbody td:first-child { grid-column: 1 / -1; }
   .stop-card tbody td.num { text-align: left; }
   .stop-card tbody td.num::after { content: " cs"; color: var(--muted); }
-  .stop-card tbody td:last-child { justify-self: end; }
+  .stop-card tbody td:nth-child(5) { justify-self: end; }
+  .stop-card tbody td.picker { grid-column: 1 / -1; }
+  .stop-card tbody td.picker:empty { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -80,6 +80,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(repo.stats())
             if url.path == "/api/routes":
                 return self._send_json(repo.list_routes())
+            if url.path == "/api/progress":
+                return self._send_json(repo.pick_progress())
+            if url.path == "/api/stockouts":
+                return self._send_json(repo.stockouts())
+            if url.path == "/api/find":
+                found = repo.find_pallet_or_order(q.get("q", ""))
+                return self._send_json(found) if found else self._send_json({"error": "No pallet or order found"}, 404)
             # /api/routes/<id>
             parts = url.path.strip("/").split("/")
             if parts[:2] == ["api", "routes"] and len(parts) == 3:

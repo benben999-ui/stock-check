@@ -58,7 +58,8 @@ CREATE TABLE routes (
     truck_type    TEXT NOT NULL CHECK (truck_type IN ('Bulk', 'Route', 'Transport')),
     truck_number  TEXT NOT NULL,
     destination   TEXT NOT NULL,
-    departs_at    TEXT NOT NULL              -- tomorrow, local time
+    departs_at    TEXT NOT NULL,             -- tomorrow, local time
+    door          TEXT                       -- loading door the truck is staged at
 );
 
 CREATE TABLE stores (
@@ -67,13 +68,19 @@ CREATE TABLE stores (
     stop_number   INTEGER NOT NULL,          -- delivery order on the truck
     name          TEXT NOT NULL,
     address       TEXT NOT NULL,
-    order_number  TEXT NOT NULL
+    order_number  TEXT NOT NULL,
+    sscc          TEXT                       -- pallet label (made-up SSCC barcode number)
 );
 
 CREATE TABLE order_lines (
-    store_id    INTEGER NOT NULL REFERENCES stores(id),
-    product_id  INTEGER NOT NULL REFERENCES products(id),
-    cases       INTEGER NOT NULL,
+    store_id     INTEGER NOT NULL REFERENCES stores(id),
+    product_id   INTEGER NOT NULL REFERENCES products(id),
+    cases        INTEGER NOT NULL,           -- cases requested
+    zone         TEXT NOT NULL DEFAULT 'BULK',      -- BULK (case pick), LAYER, FULL (full pallet)
+    qty_picked   INTEGER NOT NULL DEFAULT 0,
+    pick_status  TEXT NOT NULL DEFAULT 'available', -- available / in_progress / completed / stockout
+    picker       TEXT,                       -- operator ID of the picker
+    picked_at    TEXT,
     PRIMARY KEY (store_id, product_id)
 );
 
@@ -147,7 +154,14 @@ STORE_KINDS = [
 ]
 BIG_STORE_KINDS = ["Supercenter", "Warehouse Club", "Superstore", "Hypermarket"]
 STREETS = ["Maple St", "Center Ave", "Lake Rd", "Main St", "Division Ave", "Park Dr", "River St", "Elm Ave",
-           "Market St", "Ridge Rd", "Airport Rd", "Chicago Dr", "State St", "Washington Ave", "Pine St"]
+           "Market St", "Ridge Rd", "Airport Rd", "Chicago Dr", "State St", "Lincoln Ave", "Pine St"]
+
+
+def make_sscc(rng, n):
+    """A made-up 18-digit SSCC pallet number with a valid check digit, shown with its "00" prefix."""
+    body = "0" + "0999999" + f"{rng.randint(0, 99999):05d}{n:04d}"
+    total = sum(int(d) * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(body)))
+    return "00" + body + str((10 - total % 10) % 10)
 
 
 def make_route_code(rng, used):
@@ -292,6 +306,38 @@ def seed(db_path=DB_PATH, now=None):
            SELECT s.route_id, ol.product_id, SUM(ol.cases)
            FROM order_lines ol JOIN stores s ON s.id = ol.store_id
            GROUP BY s.route_id, ol.product_id""")
+
+    # --- tonight's picking: doors, pallet labels, and how far each order has been picked ----
+    # Uses its own random stream so the products, stores and check history above stay the same.
+    prng = random.Random(9031)
+    pickers = [f"OP-{n}" for n in prng.sample(range(101, 199), 14)]
+    for (rid, *_), door in zip(routes, prng.sample(range(1, 25), len(routes))):
+        conn.execute("UPDATE routes SET door = ? WHERE id = ?", (f"Door {door:02d}", rid))
+    for sid, *_ in stores:
+        conn.execute("UPDATE stores SET sscc = ? WHERE id = ?", (make_sscc(prng, sid), sid))
+
+    stock_kind = {pid: "pick" if pid in in_pick else "reserve" if pid in reserve_only else "out" for pid in ids}
+    route_rank = {r[0]: n for n, r in enumerate(sorted(routes, key=lambda r: r[5]))}   # by departure
+    store_route = {s[0]: s[1] for s in stores}
+    pick_rows = []
+    for sid, pid, cases in order_lines:
+        # Trucks that leave first are picked first: early routes are done, late ones not started.
+        progress = max(0.0, min(1.0, 1.35 - route_rank[store_route[sid]] * 0.095))
+        zone = "BULK" if cases <= 30 else "LAYER" if cases < 80 else "FULL"
+        r = prng.random()
+        if r < progress:
+            # A picker who reaches a slot with no product anywhere reports a stockout.
+            status, picked = ("stockout", 0) if stock_kind[pid] == "out" else ("completed", cases)
+        elif progress > 0 and r < progress + 0.06:
+            status, picked = "in_progress", prng.randint(0, max(0, cases - 1))
+        else:
+            status, picked = "available", 0
+        worked = status != "available"
+        pick_rows.append((zone, picked, status, prng.choice(pickers) if worked else None,
+                          fmt(now - timedelta(minutes=prng.randint(3, 240))) if worked else None, sid, pid))
+    conn.executemany(
+        """UPDATE order_lines SET zone = ?, qty_picked = ?, pick_status = ?, picker = ?, picked_at = ?
+           WHERE store_id = ? AND product_id = ?""", pick_rows)
 
     # --- check history: heavy at shift start, rare later ---------------------
     # Relative weight of checks per hour of the shift.

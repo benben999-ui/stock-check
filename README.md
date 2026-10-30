@@ -6,7 +6,9 @@
 
 ![Stock Check showing an IN STOCK result: send the picker to reserve location R-D3-02, 64 cases](docs/screenshot.png)
 
-![Truck routes screen: route 407 with its first store stop and each order line's pick status](docs/screenshot-routes.png)
+![Truck routes overview: cases picked, pick progress by zone, and stockouts reported by pickers](docs/screenshot-routes.png)
+
+![Route 407 detail: door, percent picked, and each store's order lines with zone, quantity picked and pick status](docs/screenshot-route-detail.png)
 
 > **Personal concept project with made-up data.** It does not connect to any real company system, and it is not affiliated with or endorsed by any company. Every product code, route, truck, location and quantity is invented.
 
@@ -27,14 +29,16 @@ This happens in a heavy burst at the start of every shift, while trucks are on f
 
 - **One input, one answer.** Scan or type a code and press Enter. The code-to-code lookup and the stock search happen automatically, and the screen shows the product, both codes, tomorrow's routes, and every location with quantities.
 - **A clear outcome.** **IN STOCK** shows where to send the picker in very large text. **OUT OF STOCK** gives a "Turn off product" button with a confirm step, then a reminder to tell the picker to say **EMPTY SLOT**, which the certifier marks as done.
-- **Truck routes**: every truck leaving tomorrow, with its stops, lines and cases. Click a truck to see each store in delivery order and every line on that store's order, marked **In pick slot**, **Pick from reserve**, **No stock** or **Turned off**. That shows at a glance which stores will get short orders.
+- **Tonight's picking at a glance.** The Truck routes screen opens with cases picked, cases left, pick progress by zone (Bulk, Layer, Full), and a list of **stockouts reported by pickers**: every product a picker found empty, how many stores and cases it shorted, and whether it still needs a certifier check. Click a code to check it.
+- **Truck routes**: every truck leaving tomorrow with its loading door, stops, cases and percent picked. Click a truck to see each store in delivery order, with its pallet label, and every line on that store's order: pick zone, cases picked out of requested, the picker and time, and a status such as **Picked**, **Stockout**, **Pick from reserve** or **Turned off**. That shows at a glance which stores will get short orders.
+- **Scan a pallet label or order number** into the same Check box to jump straight to that store's stop on its truck.
 - **An activity log** of every check, plus a "turned off right now" list with a **Turn back on** button for when a delivery arrives.
 - **Stats** with checks per hour and average time per check, so the start-of-shift spike is visible.
 
 ## How it's built
 
 - **Python standard library only**: a small web server (`server.py`) and a SQLite database. There's nothing to `pip install`.
-- **A separate data layer**: `data/repository.py` is the only code that touches the database, and the three-step lookup lives there. `data/seed.py` generates the mock data: 50 products, 18 routes with 102 made-up store stops and their orders, pick/reserve/overflow locations, and 3 days of history.
+- **A separate data layer**: `data/repository.py` is the only code that touches the database, and the three-step lookup lives there. `data/seed.py` generates the mock data: 50 products, 18 routes with loading doors, 102 made-up store stops with pallet labels and orders, tonight's simulated picking progress (pickers, zones, stockouts), pick/reserve/overflow locations, and 3 days of history.
 - **Plain HTML, CSS and JavaScript** for the screen (`static/`), with no framework and no build step.
 - **The live demo** (`docs/index.html`) runs the same screens with a browser-only copy of the data layer (`demo/demo-backend.js`), built by `build_demo.py`.
 
@@ -89,12 +93,15 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 - **IN STOCK** (green, ✓ check-mark icon): the location and case count appear in large text. Tell the picker, then click **Told picker: done**. If you scan the next code instead, the app marks it done for you.
 - **OUT OF STOCK** (red, ✕ icon): click **Turn off product**, then confirm. A yellow reminder appears: *"Tell the picker to say EMPTY SLOT in their headset."* When the picker has done it, click **Picker said it: mark done**.
 - Tip: you can type only the 5 digits (for example `76823` instead of `RT-76823`).
+- Scanning a **pallet label** (the long number, with or without the leading `00`) or typing a **store order number** (like `SO-799786`) opens that store's stop on its truck, highlighted.
 
 ### Truck Routes (F2)
-- Lists every truck leaving tomorrow: route number, truck, area, departure time, stops, lines and cases. The last column flags lines that will **ship short** (no stock, or turned off) and lines that must be **picked from reserve**.
-- Search by route, truck or area, or filter by truck type (Route, Bulk, Transport).
-- Click a truck to open it. You'll see each store stop in delivery order, with its address and order number, and every product on that store's order with cases and a pick status: ✓ In pick slot, → Pick from reserve, ✕ No stock, ⏻ Turned off.
-- Tick **Only lines that need attention** to hide the lines that are fine.
+- **At the top:** cases picked so far, cases left to pick, stockouts reported, and lines shipping short.
+- **Pick progress by zone:** cases in each pick zone (Bulk = case picks, Layer, Full = full pallets), split into available, in progress and picked, with the percent picked and the cases lost to stockouts. The yellow row is the total.
+- **Stockouts reported by pickers:** each product a picker found empty tonight, with how many stores and cases it shorted, the routes affected, and what the stock looks like now. **No stock: needs turn-off** means a certifier should check it; **Turned off** means it's already handled. Click the code to run a check.
+- **The truck list:** route, truck, loading door, area, departure time, stops, cases, percent picked, and lines that will **ship short** or must be **picked from reserve**. Search by route, truck, door or area, or filter by truck type (Route, Bulk, Transport).
+- Click a truck to open it. You'll see each store stop in delivery order, with its address, order number and pallet label, and every product on that store's order: zone, cases picked out of requested, the picker and time, and a status: ✓ Picked, 🕒 Picking now, ✕ Stockout, ⏻ Turned off, ✕ No stock, → Pick from reserve, 🕒 Ready to pick.
+- Tick **Only lines that need attention** to hide the lines that are picked or on track.
 - Click any product code to run a stock check on it. On the Check screen, the route numbers in a result open that route.
 - Turning a product off or back on updates every route right away.
 
@@ -119,8 +126,10 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 | `RT-67750` | Diet Pepsi 12pk: **OUT OF STOCK** |
 | `RT-95569` | Starry 20oz: **already turned off** earlier today |
 | `RT-99999` | **Code not found** |
+| `00009999996011100014` | A **pallet label**: opens route 407, stop 1 (Pine Hill Express) |
+| `SO-799786` | The same stop, found by its **store order number** |
 
-**Routes test:** open **Truck routes**, click route **407**, and look at the first stop. Click `RT-20172` (No stock) to check it, turn it off, then come back: the line now shows **Turned off**.
+**Routes test:** open **Truck routes**. In **Stockouts reported by pickers**, click `RT-20172` (Diet Mountain Dew, "No stock: needs turn-off"). Turn it off and confirm EMPTY SLOT, then go back to Truck routes: it now shows **Turned off**, and "products still need a check" drops by one.
 
 ---
 

@@ -72,7 +72,7 @@
         <section id="view-check" class="view active">
           <h1 class="page-title">Stock check <span class="dim js-date"></span></h1>
           <form id="check-form" class="scan-form" autocomplete="off">
-            <label for="check-input" class="scan-label">Product code from picker <span class="hint">Type or scan, then press Enter</span></label>
+            <label for="check-input" class="scan-label">Product code from picker <span class="hint">Type or scan, then press Enter. Pallet labels and store order numbers work too.</span></label>
             <div class="scan-row">
               <input id="check-input" class="scan-input" placeholder="e.g. RT-48213" autofocus spellcheck="false">
               <button class="btn btn-primary btn-xl" type="submit">Check</button>
@@ -86,8 +86,9 @@
         <!-- ROUTES --------------------------------------------------------->
         <section id="view-routes" class="view">
           <h1 class="page-title">Truck routes <span class="dim" id="routes-title-count"></span></h1>
+          <div id="routes-overview"></div>
           <div class="routes-toolbar" id="routes-toolbar">
-            <input id="routes-search" class="search" placeholder="Search route, truck or area…" spellcheck="false" aria-label="Search routes">
+            <input id="routes-search" class="search" placeholder="Search route, truck, door or area…" spellcheck="false" aria-label="Search routes">
             <select id="routes-type" class="search select" aria-label="Truck type">
               <option value="">All truck types</option>
               <option>Route</option>
