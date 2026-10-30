@@ -48,12 +48,16 @@
         id: p.id, route_code: p.route_code, inventory_code: p.inventory_code,
         brand: p.brand, name: p.name, pack_size: p.pack_size, is_active: p.is_active,
         turned_off_at: p.off_time ? fmt(notFuture(at(0, p.off_time))) : null,
+        material_number: p.material_number, material_status: p.material_status, procurement: p.procurement,
+      })),
+      other_stock: SEED.other_stock.map(([product_id, stock_type, quantity, etaDay, etaTime, reference]) => ({
+        product_id, stock_type, quantity, reference, eta: etaTime ? fmt(at(etaDay, etaTime)) : null,
       })),
       locations: SEED.locations,
       inventory: SEED.inventory.map(([product_id, location_id, quantity]) => ({ product_id, location_id, quantity })),
       routes: SEED.routes.map((r) => ({ ...r, departs_at: fmt(at(r.depart_day, r.depart_time)) })),
       route_items: SEED.route_items.map(([route_id, product_id, cases]) => ({ route_id, product_id, cases })),
-      stores: SEED.stores.map(([id, route_id, stop_number, name, address, order_number, sscc]) => ({ id, route_id, stop_number, name, address, order_number, sscc })),
+      stores: SEED.stores.map(([id, route_id, stop_number, name, address, order_number, sscc, picker]) => ({ id, route_id, stop_number, name, address, order_number, sscc, picker })),
       // Pick times are stored as "minutes before now" so the demo always looks like tonight's picking.
       order_lines: SEED.order_lines.map(([store_id, product_id, cases, zone, qty_picked, pick_status, picker, minutesAgo]) => ({
         store_id, product_id, cases, zone, qty_picked, pick_status, picker,
@@ -91,7 +95,8 @@
 
   // Step 1: the route program knows products by route code (inventory code also accepted).
   function findInRouteProgram(code) {
-    return state.products.find((p) => p.route_code === code) || state.products.find((p) => p.inventory_code === code);
+    return state.products.find((p) => p.route_code === code)
+      || state.products.find((p) => p.inventory_code === code || p.material_number === code);
   }
 
   const TYPE_ORDER = { pick: 0, reserve: 1, overflow: 2 };
@@ -112,7 +117,7 @@
       .filter((ri) => ri.product_id === product.id)
       .map((ri) => {
         const r = state.routes.find((x) => x.id === ri.route_id);
-        return { id: r.id, route_number: r.route_number, truck_type: r.truck_type, truck_number: r.truck_number, destination: r.destination, departs_at: r.departs_at, cases: ri.cases };
+        return { id: r.id, route_number: r.route_number, truck_type: r.truck_type, truck_number: r.truck_number, destination: r.destination, departs_at: r.departs_at, door: r.door, cases: ri.cases };
       })
       .sort((a, b) => (a.departs_at < b.departs_at ? -1 : 1));
 
@@ -122,7 +127,12 @@
     const outcome = !product.is_active ? 'ALREADY_OFF' : total > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK';
     const send_to = elsewhere.length ? elsewhere : (pick_slot && pick_slot.quantity > 0 ? [pick_slot] : []);
 
-    return { code, outcome, product: { ...product }, inventory_code, routes, stock, send_to, pick_slot, total_cases: total };
+    const OTHER_ORDER = { inbound: 0, quality: 1, blocked: 2 };
+    const other_stock = state.other_stock
+      .filter((o) => o.product_id === product.id)
+      .map(({ stock_type, quantity, eta, reference }) => ({ stock_type, quantity, eta, reference }))
+      .sort((a, b) => OTHER_ORDER[a.stock_type] - OTHER_ORDER[b.stock_type]);
+    return { code, outcome, product: { ...product }, inventory_code, routes, stock, send_to, pick_slot, total_cases: total, other_stock };
   }
 
   // ------------------------------------------------------------------ log & actions
@@ -285,7 +295,7 @@
           })
           .sort((a, b) => (a.name + a.pack_size).localeCompare(b.name + b.pack_size));
         return {
-          id: s.id, stop_number: s.stop_number, name: s.name, address: s.address, order_number: s.order_number, sscc: s.sscc, lines,
+          id: s.id, stop_number: s.stop_number, name: s.name, address: s.address, order_number: s.order_number, sscc: s.sscc, picker: s.picker, lines,
           cases: lines.reduce((n, l) => n + l.cases, 0),
           cases_picked: lines.reduce((n, l) => n + l.qty_picked, 0),
           short_lines: lines.filter((l) => SHORT.includes(l.status)).length,
@@ -346,6 +356,73 @@
     return store ? { route_id: store.route_id, store_id: store.id } : null;
   }
 
+  // ------------------------------------------------------------------ pickers (same rules as repository.py)
+  function buildAssignments(onlyPicker) {
+    const stock = productPickStatus();
+    const routeById = Object.fromEntries(state.routes.map((r) => [r.id, r]));
+    const stores = state.stores
+      .filter((s) => s.picker && (!onlyPicker || s.picker === onlyPicker))
+      .sort((a, b) => {
+        const ra = routeById[a.route_id], rb = routeById[b.route_id];
+        return ra.departs_at === rb.departs_at ? a.stop_number - b.stop_number : (ra.departs_at < rb.departs_at ? -1 : 1);
+      });
+    const pickers = {};
+    stores.forEach((s) => {
+      const r = routeById[s.route_id];
+      const lines = state.order_lines
+        .filter((ol) => ol.store_id === s.id)
+        .map((ol) => {
+          const p = productById(ol.product_id);
+          return { product_id: p.id, route_code: p.route_code, name: p.name, pack_size: p.pack_size, zone: ol.zone,
+            cases: ol.cases, qty_picked: ol.qty_picked, pick_status: ol.pick_status, picked_at: ol.picked_at,
+            status: lineStatus(ol.pick_status, stock[p.id]) };
+        })
+        .sort((a, b) => (a.name + a.pack_size).localeCompare(b.name + b.pack_size));
+      const left = lines.filter((l) => ['available', 'in_progress'].includes(l.pick_status) && l.status !== 'off');
+      const started = lines.some((l) => l.pick_status !== 'available');
+      (pickers[s.picker] = pickers[s.picker] || []).push({
+        store_id: s.id, stop_number: s.stop_number, store: s.name, address: s.address, order_number: s.order_number, sscc: s.sscc,
+        route_id: r.id, route_number: r.route_number, truck_type: r.truck_type, truck_number: r.truck_number, door: r.door,
+        departs_at: r.departs_at, lines,
+        cases: lines.reduce((n, l) => n + l.cases, 0),
+        cases_picked: lines.reduce((n, l) => n + l.qty_picked, 0),
+        cases_left: left.reduce((n, l) => n + l.cases - l.qty_picked, 0),
+        lines_left: left.length,
+        short_lines: lines.filter((l) => SHORT.includes(l.status)).length,
+        order_status: !left.length ? 'done' : started ? 'picking' : 'waiting',
+      });
+    });
+    return pickers;
+  }
+
+  function pickerSummary(picker, orders) {
+    const lines = orders.flatMap((o) => o.lines);
+    const times = lines.map((l) => l.picked_at).filter(Boolean).sort();
+    const current = orders.find((o) => o.order_status !== 'done');
+    const cases = orders.reduce((n, o) => n + o.cases, 0);
+    const picked = orders.reduce((n, o) => n + o.cases_picked, 0);
+    return {
+      picker, orders: orders.length, orders_done: orders.filter((o) => o.order_status === 'done').length,
+      lines: lines.length, lines_left: orders.reduce((n, o) => n + o.lines_left, 0),
+      cases, cases_picked: picked, cases_left: orders.reduce((n, o) => n + o.cases_left, 0),
+      pct_picked: cases ? Math.round((100 * picked) / cases) : 0,
+      stockouts: lines.filter((l) => l.pick_status === 'stockout').length,
+      last_pick: times.length ? times[times.length - 1] : null,
+      current: current ? { route_id: current.route_id, route_number: current.route_number, door: current.door,
+        stop_number: current.stop_number, store: current.store, store_id: current.store_id } : null,
+    };
+  }
+
+  function listPickers() {
+    const all = buildAssignments();
+    return Object.keys(all).sort().map((p) => pickerSummary(p, all[p]));
+  }
+
+  function pickerDetail(picker) {
+    const orders = buildAssignments(picker)[picker];
+    return orders ? { summary: pickerSummary(picker, orders), orders } : null;
+  }
+
   // ------------------------------------------------------------------ router (same paths as server.py)
   function route(path, body) {
     const url = new URL(path, 'http://demo.local');
@@ -364,6 +441,11 @@
       if (url.pathname === '/api/routes') return listRoutes();
       if (url.pathname === '/api/progress') return pickProgress();
       if (url.pathname === '/api/stockouts') return stockouts();
+      if (url.pathname === '/api/pickers') return listPickers();
+      if (parts[1] === 'pickers' && parts.length === 3) {
+        const detail = pickerDetail(decodeURIComponent(parts[2]));
+        if (detail) return detail;
+      }
       if (url.pathname === '/api/find') {
         const found = findPalletOrOrder(q.q);
         if (found) return found;

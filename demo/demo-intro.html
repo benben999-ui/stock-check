@@ -6,7 +6,7 @@
     </summary>
     <div class="demo-grid">
       <div class="demo-story">
-        <p>When a picker reaches an empty pick slot, a certifier checks whether product is anywhere else in the building. Today that means copying codes between a route program and two pages of an inventory website, and then turning the product off by hand. This prototype puts the whole check on one screen, and a <b>Truck routes</b> view shows tonight's picking for tomorrow's trucks: progress by zone, the stockouts pickers reported, and every store order with the lines that will ship short.</p>
+        <p>When a picker reaches an empty pick slot, a certifier checks whether product is anywhere else in the building. Today that means copying codes between a route program and two pages of an inventory website, and then turning the product off by hand. This prototype puts the whole check on one screen, and a <b>Truck routes</b> view shows tonight's picking for tomorrow's trucks: progress by zone, the stockouts pickers reported, and every store order with the lines that will ship short. A <b>Pickers</b> view shows each picker's assignment, order by order, with the truck, door and stop it loads onto.</p>
         <div class="demo-compare">
           <div>
             <h3>Today: 6 steps, 2 systems</h3>
@@ -34,12 +34,14 @@
           <button class="demo-chip" data-try="RT-76823"><span class="mono">RT-76823</span>In stock in reserve</button>
           <button class="demo-chip" data-try="RT-45054"><span class="mono">RT-45054</span>Stock only in the pick slot</button>
           <button class="demo-chip" data-try="RT-20172"><span class="mono">RT-20172</span>Out of stock: turn it off</button>
+          <button class="demo-chip" data-try="RT-50352"><span class="mono">RT-50352</span>Out of stock, delivery inbound</button>
           <button class="demo-chip" data-try="RT-95569"><span class="mono">RT-95569</span>Already turned off</button>
           <button class="demo-chip" data-try="RT-99999"><span class="mono">RT-99999</span>Unknown code</button>
           <button class="demo-chip" data-try="{{SAMPLE_PALLET}}"><span class="mono">{{SAMPLE_PALLET}}</span>Scan a pallet label</button>
         </div>
         <div class="demo-actions">
           <button class="btn btn-primary" id="demo-routes">Browse tomorrow's truck routes</button>
+          <button class="btn" id="demo-pickers">See pickers' assignments</button>
           <button class="btn btn-ghost" id="demo-reset">Reset demo</button>
         </div>
         <p class="demo-note">All products, codes, routes, locations and quantities are made up. Not connected to or endorsed by any company. Your clicks are saved only in this browser.</p>

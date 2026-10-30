@@ -10,6 +10,8 @@
 
 ![Route 407 detail: door, percent picked, and each store's order lines with zone, quantity picked and pick status](docs/screenshot-route-detail.png)
 
+![Picker OP-107's assignment: orders done, cases and lines left, and each store order with its route, door and stop](docs/screenshot-pickers.png)
+
 > **Personal concept project with made-up data.** It does not connect to any real company system, and it is not affiliated with or endorsed by any company. Every product code, route, truck, location and quantity is invented.
 
 ## The problem
@@ -27,18 +29,20 @@ This happens in a heavy burst at the start of every shift, while trucks are on f
 
 ## What this prototype does
 
-- **One input, one answer.** Scan or type a code and press Enter. The code-to-code lookup and the stock search happen automatically, and the screen shows the product, both codes, tomorrow's routes, and every location with quantities.
+- **One input, one answer.** Scan or type a code and press Enter. The code-to-code lookup and the stock search happen automatically, and the screen shows the product, all three codes (route program, inventory system, material number), tomorrow's routes, and every location with quantities.
+- **The material record and stock you can't pick yet.** Each result shows the material status (Active, Inactive, Costing required, Costing complete, BOM required) and procurement type (Purchased or Produced), plus stock on **quality hold**, **blocked**, or **inbound** with its expected arrival. When it matters, the app says what to do: an inactive material won't be restocked, so turn it off; a delivery is inbound, so turn it off for now and back on once it's received; stock on hold can't be picked unless released.
 - **A clear outcome.** **IN STOCK** shows where to send the picker in very large text. **OUT OF STOCK** gives a "Turn off product" button with a confirm step, then a reminder to tell the picker to say **EMPTY SLOT**, which the certifier marks as done.
 - **Tonight's picking at a glance.** The Truck routes screen opens with cases picked, cases left, pick progress by zone (Bulk, Layer, Full), and a list of **stockouts reported by pickers**: every product a picker found empty, how many stores and cases it shorted, and whether it still needs a certifier check. Click a code to check it.
 - **Truck routes**: every truck leaving tomorrow with its loading door, stops, cases and percent picked. Click a truck to see each store in delivery order, with its pallet label, and every line on that store's order: pick zone, cases picked out of requested, the picker and time, and a status such as **Picked**, **Stockout**, **Pick from reserve** or **Turned off**. That shows at a glance which stores will get short orders.
 - **Scan a pallet label or order number** into the same Check box to jump straight to that store's stop on its truck.
+- **Pickers**: each picker's assignment for the night, with orders done, cases and lines left, stockouts they reported, and what they're working on now. Open a picker to see every store order they've been given in pick order (Done, Picking now, Up next). Each order shows its truck, loading door, stop number, store, order number and pallet, and every line on it. Click an order's route to jump to that stop on the truck, or click the picker on a truck's stop to jump back.
 - **An activity log** of every check, plus a "turned off right now" list with a **Turn back on** button for when a delivery arrives.
 - **Stats** with checks per hour and average time per check, so the start-of-shift spike is visible.
 
 ## How it's built
 
 - **Python standard library only**: a small web server (`server.py`) and a SQLite database. There's nothing to `pip install`.
-- **A separate data layer**: `data/repository.py` is the only code that touches the database, and the three-step lookup lives there. `data/seed.py` generates the mock data: 50 products, 18 routes with loading doors, 102 made-up store stops with pallet labels and orders, tonight's simulated picking progress (pickers, zones, stockouts), pick/reserve/overflow locations, and 3 days of history.
+- **A separate data layer**: `data/repository.py` is the only code that touches the database, and the three-step lookup lives there. `data/seed.py` generates the mock data: 50 products, material records, 18 routes with loading doors, 102 made-up store stops with pallet labels and orders, 14 pickers working through their assigned orders (zones, picks, stockouts), stock on hold or inbound, pick/reserve/overflow locations, and 3 days of history.
 - **Plain HTML, CSS and JavaScript** for the screen (`static/`), with no framework and no build step.
 - **The live demo** (`docs/index.html`) runs the same screens with a browser-only copy of the data layer (`demo/demo-backend.js`), built by `build_demo.py`.
 
@@ -105,6 +109,13 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 - Click any product code to run a stock check on it. On the Check screen, the route numbers in a result open that route.
 - Turning a product off or back on updates every route right away.
 
+### Pickers
+- The list shows every picker with an assignment tonight: orders done out of assigned, percent picked, cases and lines left, stockouts they reported, the route, door and stop they're working on now, and their last pick time.
+- Click a picker to open their assignment. The top shows totals and the order they're on now. Below are their store orders in pick order, each marked **Done**, **Picking now** or **Up next**, with the truck (route, door, stop, truck number, departure time), store, order number and pallet label, and every line with zone, cases picked out of requested, status and pick time.
+- Tick **Only what's left to pick** to see just the lines they still need.
+- Click an order's **Route · Door · Stop** to open that stop on the truck. On a truck's stop, click the **Picker** ID to come back.
+- Orders on the last trucks of the night haven't been released to pickers yet, so they don't appear here. Their truck stops say "Not released to a picker yet".
+
 ### Activity Log (F3)
 - **Turned off right now** lists every product that is currently off. Click **Turn back on** when a delivery arrives.
 - Below that is every check with its time, product, code, result, what was done, and how long it took. Use the search box to filter.
@@ -121,15 +132,18 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 |---|---|
 | `RT-76823` | Pepsi 12pk: pick slot empty, **IN STOCK in reserve** (R-D3-02) and overflow |
 | `RT-35578` | Brisk 1L: pick slot empty, **IN STOCK in reserve** |
-| `RT-45054` | Mug Root Beer 12pk: system shows stock **in the pick slot itself**, so the app asks for a recheck |
-| `RT-20172` | Diet Mountain Dew 20oz: **OUT OF STOCK**, so you turn it off |
-| `RT-67750` | Diet Pepsi 12pk: **OUT OF STOCK** |
-| `RT-95569` | Starry 20oz: **already turned off** earlier today |
+| `RT-45054` | Mug Root Beer 12pk: system shows stock **in the pick slot itself**, so the app asks for a recheck. Also shows 12 cases on **quality hold** that can't be picked |
+| `RT-20172` | Diet Mountain Dew 20oz: **OUT OF STOCK**, and the material is **Inactive**, so turn it off |
+| `RT-50352` | Mountain Dew 6pk: **OUT OF STOCK**, but 140 cases are **inbound** early tomorrow |
+| `RT-67750` | Diet Pepsi 12pk: **OUT OF STOCK**, and its material is still **Costing required** (not fully set up) |
+| `RT-95569` | Starry 20oz: **already turned off** earlier today, with a delivery inbound |
 | `RT-99999` | **Code not found** |
 | `00009999996011100014` | A **pallet label**: opens route 407, stop 1 (Pine Hill Express) |
 | `SO-799786` | The same stop, found by its **store order number** |
 
 **Routes test:** open **Truck routes**. In **Stockouts reported by pickers**, click `RT-20172` (Diet Mountain Dew, "No stock: needs turn-off"). Turn it off and confirm EMPTY SLOT, then go back to Truck routes: it now shows **Turned off**, and "products still need a check" drops by one.
+
+**Pickers test:** open **Pickers** and click **OP-107**. Their first two orders are **Done**, the third is **Picking now**. Tick **Only what's left to pick**, then click that order's **Route 442 · Door 23 · Stop 4** to open the stop on its truck, and click the **Picker** ID there to come back.
 
 ---
 

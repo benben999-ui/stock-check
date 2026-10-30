@@ -36,6 +36,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 7h12v9H2zM14 10h4l3 3v3h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           <span>Truck routes</span><span class="nav-count" id="routes-count"></span>
         </button>
+        <button class="tab" data-view="pickers" data-label="Pickers" role="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2M3 14h4v6H4a1 1 0 0 1-1-1zM21 14h-4v6h3a1 1 0 0 0 1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Pickers</span><span class="nav-count" id="pickers-count"></span>
+        </button>
         <button class="tab" data-view="log" data-label="Activity log" role="tab">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Activity log</span><span class="nav-count" id="off-count"></span>
@@ -98,6 +102,12 @@
             <span class="muted routes-hint">Click a route to see its stores and orders.</span>
           </div>
           <div id="routes-body"></div>
+        </section>
+
+        <!-- PICKERS -------------------------------------------------------->
+        <section id="view-pickers" class="view">
+          <h1 class="page-title">Pickers <span class="dim" id="pickers-title-count"></span></h1>
+          <div id="pickers-body"></div>
         </section>
 
         <!-- LOG ------------------------------------------------------------>

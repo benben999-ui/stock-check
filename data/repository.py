@@ -41,13 +41,15 @@ def ensure_database():
     if not os.path.exists(DB_PATH):
         seed_module.seed()
         return
-    # A database made by an older version (before store orders had picking details) is rebuilt.
+    # A database made by an older version (before picking details and held/inbound stock) is rebuilt.
     conn = sqlite3.connect(DB_PATH)
     try:
         columns = [row[1] for row in conn.execute("PRAGMA table_info(order_lines)")]
+        has_other_stock = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='other_stock'").fetchone()
     finally:
         conn.close()
-    if "pick_status" not in columns:
+    if "pick_status" not in columns or not has_other_stock:
         seed_module.seed()
 
 
@@ -70,14 +72,15 @@ def _find_product_in_route_program(conn, code):
     """Step 1: the route program knows products by their route code."""
     row = conn.execute("SELECT * FROM products WHERE route_code = ?", (code,)).fetchone()
     if row is None:
-        # Forgiving: also accept the inventory code if that's what was scanned.
-        row = conn.execute("SELECT * FROM products WHERE inventory_code = ?", (code,)).fetchone()
+        # Forgiving: also accept the inventory code or material number if that's what was scanned.
+        row = conn.execute("SELECT * FROM products WHERE inventory_code = ? OR material_number = ?",
+                           (code, code)).fetchone()
     return row
 
 
 def _routes_for_product(conn, product_id):
     rows = conn.execute(
-        """SELECT r.id, r.route_number, r.truck_type, r.truck_number, r.destination, r.departs_at, ri.cases
+        """SELECT r.id, r.route_number, r.truck_type, r.truck_number, r.destination, r.departs_at, r.door, ri.cases
            FROM route_items ri JOIN routes r ON r.id = ri.route_id
            WHERE ri.product_id = ? ORDER BY r.departs_at""",
         (product_id,),
@@ -101,6 +104,16 @@ def _stock_by_inventory_code(conn, inventory_code):
            WHERE p.inventory_code = ?
            ORDER BY CASE l.type WHEN 'pick' THEN 0 WHEN 'reserve' THEN 1 ELSE 2 END, i.quantity DESC""",
         (inventory_code,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _other_stock(conn, product_id):
+    """Stock that exists but can't be picked: quality hold, blocked, or inbound (with ETA)."""
+    rows = conn.execute(
+        """SELECT stock_type, quantity, eta, reference FROM other_stock WHERE product_id = ?
+           ORDER BY CASE stock_type WHEN 'inbound' THEN 0 WHEN 'quality' THEN 1 ELSE 2 END""",
+        (product_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -143,6 +156,7 @@ def lookup(code):
             "send_to": send_to,
             "pick_slot": pick_slot,
             "total_cases": total,
+            "other_stock": _other_stock(conn, product["id"]),
         }
     finally:
         conn.close()
@@ -425,7 +439,7 @@ def route_detail(route_id):
             return None
         stock = _product_pick_status(conn)
         stores = [dict(s) for s in conn.execute(
-            """SELECT id, stop_number, name, address, order_number, sscc
+            """SELECT id, stop_number, name, address, order_number, sscc, picker
                FROM stores WHERE route_id = ? ORDER BY stop_number""", (route_id,))]
         lines = conn.execute(
             """SELECT ol.store_id, ol.cases, ol.zone, ol.qty_picked, ol.pick_status, ol.picker, ol.picked_at,
@@ -533,3 +547,107 @@ def find_pallet_or_order(query):
     finally:
         conn.close()
     return {"route_id": row["route_id"], "store_id": row["id"]} if row else None
+
+
+# ---------------------------------------------------------------------------
+# Pickers and their assignments
+# ---------------------------------------------------------------------------
+
+def _assignment_rows(conn, picker=None):
+    sql = """SELECT s.picker, s.id AS store_id, s.stop_number, s.name AS store, s.address, s.order_number, s.sscc,
+                    r.id AS route_id, r.route_number, r.truck_type, r.truck_number, r.door, r.departs_at,
+                    ol.cases, ol.zone, ol.qty_picked, ol.pick_status, ol.picked_at,
+                    p.id AS product_id, p.route_code, p.name, p.pack_size
+             FROM stores s
+             JOIN routes r ON r.id = s.route_id
+             JOIN order_lines ol ON ol.store_id = s.id
+             JOIN products p ON p.id = ol.product_id
+             WHERE s.picker IS NOT NULL"""
+    params = []
+    if picker:
+        sql += " AND s.picker = ?"
+        params.append(picker)
+    sql += " ORDER BY r.departs_at, s.stop_number, p.name, p.pack_size"
+    return conn.execute(sql, params).fetchall()
+
+
+def _still_to_pick(line):
+    # Lines a picker will still be sent to (a turned-off product is skipped and ships short).
+    return line["pick_status"] in ("available", "in_progress") and line["status"] != "off"
+
+
+def _build_assignments(rows, stock):
+    """Group order lines into each picker's store orders, in the order they'll be picked."""
+    pickers = {}
+    for r in rows:
+        line = dict(r, status=_line_status(r["pick_status"], stock[r["product_id"]]))
+        orders = pickers.setdefault(r["picker"], {})
+        order = orders.get(r["store_id"])
+        if order is None:
+            order = orders[r["store_id"]] = {
+                "store_id": r["store_id"], "stop_number": r["stop_number"], "store": r["store"],
+                "address": r["address"], "order_number": r["order_number"], "sscc": r["sscc"],
+                "route_id": r["route_id"], "route_number": r["route_number"], "truck_type": r["truck_type"],
+                "truck_number": r["truck_number"], "door": r["door"], "departs_at": r["departs_at"],
+                "lines": [], "cases": 0, "cases_picked": 0, "cases_left": 0, "lines_left": 0, "short_lines": 0,
+            }
+        order["lines"].append({k: line[k] for k in ("product_id", "route_code", "name", "pack_size", "zone",
+                                                     "cases", "qty_picked", "pick_status", "picked_at", "status")})
+        order["cases"] += line["cases"]
+        order["cases_picked"] += line["qty_picked"]
+        order["short_lines"] += line["status"] in SHORT_LINE_STATUSES
+        if _still_to_pick(line):
+            order["lines_left"] += 1
+            order["cases_left"] += line["cases"] - line["qty_picked"]
+    for orders in pickers.values():
+        for o in orders.values():
+            started = any(l["pick_status"] != "available" for l in o["lines"])
+            o["order_status"] = "done" if o["lines_left"] == 0 else "picking" if started else "waiting"
+    return {p: list(orders.values()) for p, orders in pickers.items()}
+
+
+def _picker_summary(picker, orders):
+    lines = [l for o in orders for l in o["lines"]]
+    picked_times = [l["picked_at"] for l in lines if l["picked_at"]]
+    current = next((o for o in orders if o["order_status"] != "done"), None)
+    cases = sum(o["cases"] for o in orders)
+    picked = sum(o["cases_picked"] for o in orders)
+    return {
+        "picker": picker,
+        "orders": len(orders),
+        "orders_done": sum(o["order_status"] == "done" for o in orders),
+        "lines": len(lines),
+        "lines_left": sum(o["lines_left"] for o in orders),
+        "cases": cases,
+        "cases_picked": picked,
+        "cases_left": sum(o["cases_left"] for o in orders),
+        "pct_picked": round(100 * picked / cases) if cases else 0,
+        "stockouts": sum(l["pick_status"] == "stockout" for l in lines),
+        "last_pick": max(picked_times) if picked_times else None,
+        "current": {k: current[k] for k in ("route_id", "route_number", "door", "stop_number", "store", "store_id")}
+                   if current else None,
+    }
+
+
+def list_pickers():
+    """Every picker with an assignment tonight: progress, what's left, and where they are now."""
+    conn = _connect()
+    try:
+        stock = _product_pick_status(conn)
+        assignments = _build_assignments(_assignment_rows(conn), stock)
+    finally:
+        conn.close()
+    return [_picker_summary(p, orders) for p, orders in sorted(assignments.items())]
+
+
+def picker_detail(picker):
+    """One picker's store orders in pick order, each tied to its truck, door and stop."""
+    conn = _connect()
+    try:
+        stock = _product_pick_status(conn)
+        orders = _build_assignments(_assignment_rows(conn, picker), stock).get(picker)
+    finally:
+        conn.close()
+    if not orders:
+        return None
+    return {"summary": _picker_summary(picker, orders), "orders": orders}

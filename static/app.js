@@ -22,6 +22,21 @@ const LINE_STATUS = {
   ready:    { label: 'Ready to pick',     cls: 'neutral', icon: 'clock' },
 };
 const SHORT_STATUSES = ['stockout', 'off', 'nostock'];
+
+// Material record status (from the stock system's material master).
+const MATERIAL_STATUS = {
+  'Active':           { cls: 'good', icon: 'check' },
+  'Costing complete': { cls: 'info', icon: 'check' },
+  'Costing required': { cls: 'warn', icon: 'question' },
+  'BOM required':     { cls: 'warn', icon: 'question' },
+  'Inactive':         { cls: 'bad',  icon: 'x' },
+};
+// Stock that exists but can't be picked.
+const OTHER_STOCK = {
+  inbound: { label: 'Inbound',        cls: 'info', icon: 'clock' },
+  quality: { label: 'Quality hold',   cls: 'warn', icon: 'power' },
+  blocked: { label: 'Blocked',        cls: 'warn', icon: 'power' },
+};
 const CALM_STATUSES = ['picked', 'picking', 'ready'];
 
 // What a product can be picked from right now (for the stockout list).
@@ -120,6 +135,7 @@ function showView(name) {
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
   if (name === 'check') $('#check-input').focus({ preventScroll: true });
   if (name === 'routes') loadRoutes();
+  if (name === 'pickers') loadPickers();
   if (name === 'log') loadLog();
   if (name === 'stats') loadStats();
 }
@@ -139,7 +155,9 @@ let sidebarTimer;
 function scheduleSidebar() { clearTimeout(sidebarTimer); sidebarTimer = setTimeout(refreshSidebar, 150); }
 async function refreshSidebar() {
   try {
-    const [s, off, routes] = await Promise.all([apiCall('/api/stats'), apiCall('/api/turned-off'), apiCall('/api/routes')]);
+    const [s, off, routes, pickers] = await Promise.all([
+      apiCall('/api/stats'), apiCall('/api/turned-off'), apiCall('/api/routes'), apiCall('/api/pickers')]);
+    $('#pickers-count').textContent = pickers.length;
     $('#ss-checks').textContent = s.today.total;
     $('#ss-instock').textContent = s.today.in_stock;
     $('#ss-off').textContent = off.length;
@@ -191,19 +209,49 @@ function detailsHtml(d) {
       ${d.stock.map((s) => `<tr class="${s.quantity === 0 ? 'zero' : (s.type !== 'pick' ? 'highlight' : '')}">
         <td class="mono">${esc(s.location_id)}</td><td>${s.type === 'pick' ? 'Pick slot' : s.type === 'reserve' ? 'Reserve' : 'Overflow'}</td>
         <td class="num">${s.quantity === 0 ? '0 (empty)' : s.quantity}</td></tr>`).join('')}
-      <tr><td colspan="2"><b>Total in building</b></td><td class="num"><b>${d.total_cases}</b></td></tr>
+      <tr><td colspan="2"><b>Pickable in building</b></td><td class="num"><b>${d.total_cases}</b></td></tr>
     </tbody></table>`;
+  const other = (d.other_stock || []).length
+    ? `<h3 class="section-title held-title">Not pickable yet</h3>
+      <table class="table"><thead><tr><th>Stock type</th><th>Details</th><th class="num">Cases</th></tr></thead><tbody>
+        ${d.other_stock.map((o) => `<tr><td>${pill(OTHER_STOCK[o.stock_type].cls, OTHER_STOCK[o.stock_type].icon, OTHER_STOCK[o.stock_type].label)}</td>
+          <td>${esc(o.reference || '')}${o.eta ? ` · expected <b>${whenOf(o.eta)}</b>` : ''}</td><td class="num">${o.quantity}</td></tr>`).join('')}
+      </tbody></table>`
+    : '';
+  const ms = MATERIAL_STATUS[p.material_status] || MATERIAL_STATUS.Active;
   return `
     <div class="product-line"><span class="product-name">${esc(p.name)}</span><span class="product-pack">${esc(p.pack_size)}</span></div>
     <div class="codes">
       <div class="code-chip"><small>Route program code</small><span class="mono">${esc(p.route_code)}</span></div>
       <div class="code-chip"><small>Inventory system code</small><span class="mono">${esc(d.inventory_code)}</span></div>
+      <div class="code-chip"><small>Material number</small><span class="mono">${esc(p.material_number || '')}</span></div>
+      <div class="code-chip"><small>Material status</small>${pill(ms.cls, ms.icon, p.material_status)}</div>
+      <div class="code-chip"><small>Procurement</small><span class="chip-text">${esc(p.procurement || '')}</span></div>
     </div>
-    <div class="lookup-steps">✓ Found in route program → ✓ translated to inventory code → ✓ checked reserve &amp; overflow (automatic)</div>
+    <div class="lookup-steps">✓ Found in route program → ✓ translated to inventory code → ✓ matched material record → ✓ checked reserve, overflow, holds &amp; inbound (automatic)</div>
     <div class="two-col">
       <div><h3 class="section-title">Tomorrow's routes (${d.routes.length})</h3><div class="table-wrap">${routes}</div></div>
-      <div><h3 class="section-title">Warehouse inventory</h3><div class="table-wrap">${stock}</div></div>
+      <div><h3 class="section-title">Warehouse inventory</h3><div class="table-wrap">${stock}${other}</div></div>
     </div>`;
+}
+
+// Advice drawn from the material record and from stock that can't be picked yet.
+function adviceHtml(d) {
+  const notes = [];
+  const p = d.product;
+  const inbound = (d.other_stock || []).filter((o) => o.stock_type === 'inbound');
+  const held = (d.other_stock || []).filter((o) => o.stock_type !== 'inbound');
+  if (p.material_status === 'Inactive') {
+    notes.push(['bad', 'x', '<b>Material is inactive.</b> No more deliveries are expected for this item, so turn it off rather than waiting.']);
+  } else if (['Costing required', 'BOM required'].includes(p.material_status)) {
+    notes.push(['warn', 'question', `<b>Material not fully set up (${esc(p.material_status.toLowerCase())}).</b> Stock may not be receivable yet. Let inventory control know.`]);
+  }
+  inbound.forEach((o) => notes.push(['info', 'clock',
+    `<b>${o.quantity} cases inbound</b> (${esc(o.reference || 'inbound load')}), expected <b>${whenOf(o.eta)}</b>. ` +
+    (p.is_active ? 'Turn it off for now, then back on once it is received.' : 'Turn it back on once it is received.')]));
+  held.forEach((o) => notes.push(['warn', 'power',
+    `<b>${o.quantity} cases ${o.stock_type === 'quality' ? 'on quality hold' : 'blocked'}</b> (${esc(o.reference || '')}). They can't be picked unless released.`]));
+  return notes.map(([cls, icon, text]) => `<div class="advice ${cls}">${ICON[icon]}<span>${text}</span></div>`).join('');
 }
 
 /**
@@ -233,6 +281,7 @@ function renderResult(container, data, stage) {
           <span class="send-type">${s.type === 'pick' ? 'Pick slot' : s.type === 'reserve' ? 'Reserve' : 'Overflow'}</span></div>`).join('')}
         ${inPickOnly ? '<div class="send-note">⚠ System shows stock in the pick slot itself. Have the picker recheck the slot, including behind and under it.</div>' : ''}
       </div>
+      ${adviceHtml(d)}
       ${stage === 'relayed'
         ? `<div class="done-banner">${ICON.check} Location relayed to picker.</div>`
         : `<div class="action-row"><button class="btn btn-good btn-lg" data-act="relayed">${ICON.check} Told picker: done</button>
@@ -241,8 +290,8 @@ function renderResult(container, data, stage) {
 
   if (d.outcome === 'OUT_OF_STOCK' || stage === 'turned_off' || stage === 'empty_done') {
     if (stage === 'decide') {
-      top = verdictHtml('bad', 'x', 'OUT OF STOCK', 'No product in pick slot, reserve, or overflow.');
-      actions = `<div class="action-row"><button class="btn btn-danger btn-lg" data-act="off">${ICON.power} Turn off product</button></div>`;
+      top = verdictHtml('bad', 'x', 'OUT OF STOCK', 'No pickable product in pick slot, reserve, or overflow.');
+      actions = `${adviceHtml(d)}<div class="action-row"><button class="btn btn-danger btn-lg" data-act="off">${ICON.power} Turn off product</button></div>`;
     } else if (stage === 'turned_off') {
       top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is now off in the route program.');
       actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
@@ -259,6 +308,7 @@ function renderResult(container, data, stage) {
     top = verdictHtml('neutral', 'power', 'ALREADY TURNED OFF', `This product was turned off ${at}.`);
     actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
         <div class="reminder-text">If the headset still sent the picker here, have them say <b>EMPTY SLOT</b>.</div></div>
+      ${adviceHtml(d)}
       <div class="action-row"><button class="btn btn-lg" data-act="on">${ICON.power} Turn back on (delivery arrived)</button></div>`;
   }
 
@@ -522,7 +572,8 @@ function renderRouteDetail() {
           <div class="stop-info">
             <div class="stop-name">${esc(s.name)}</div>
             <div class="muted">${esc(s.address)} · Order <span class="mono">${esc(s.order_number)}</span></div>
-            <div class="pallet">Pallet <span class="mono">${esc(palletLabel(s.sscc))}</span></div>
+            <div class="pallet">Pallet <span class="mono">${esc(palletLabel(s.sscc))}</span> ·
+              ${s.picker ? `Picker <button class="code-link small" data-picker="${esc(s.picker)}" title="See ${esc(s.picker)}'s assignment">${esc(s.picker)}</button>` : 'Not released to a picker yet'}</div>
           </div>
           <div class="stop-totals"><span class="mono">${s.lines.length} lines · ${s.cases_picked}/${s.cases} cs picked</span>
             ${s.short_lines ? pill('bad', 'x', `${s.short_lines} short`) : ''}</div>
@@ -547,6 +598,8 @@ function renderRouteDetail() {
 
 $('#view-routes').addEventListener('click', (e) => {
   if (e.target.closest('[data-back]')) { renderRouteList(); window.scrollTo({ top: 0 }); return; }
+  const picker = e.target.closest('[data-picker]');
+  if (picker) { goToPicker(picker.dataset.picker); return; }
   const code = e.target.closest('[data-code]');
   if (code) { checkCode(code.dataset.code); return; }
   const row = e.target.closest('[data-route]');
@@ -559,6 +612,141 @@ $('#routes-body').addEventListener('keydown', (e) => {
 $('#routes-body').addEventListener('change', (e) => { if (e.target.id === 'routes-attention') renderRouteDetail(); });
 $('#routes-search').addEventListener('input', renderRouteList);
 $('#routes-type').addEventListener('change', renderRouteList);
+
+// ---------------------------------------------------------------- PICKERS view
+// Each picker's assignment: the store orders they've been given, in pick order, what's left,
+// and which truck, door and stop every order belongs to.
+let pickersCache = [];
+let currentPickerId = null;
+let pickerDetailCache = null;
+
+const ORDER_STATUS = {
+  done:    { label: 'Done',        cls: 'good',    icon: 'check' },
+  picking: { label: 'Picking now', cls: 'info',    icon: 'clock' },
+  waiting: { label: 'Up next',     cls: 'neutral', icon: 'clock' },
+};
+const LEFT_STATUSES = ['ready', 'reserve', 'picking', 'nostock'];
+
+function goToPicker(id) {
+  currentPickerId = id;
+  showView('pickers');
+}
+
+async function loadPickers() {
+  pickersCache = await api('/api/pickers');
+  const left = pickersCache.reduce((n, p) => n + p.cases_left, 0);
+  $('#pickers-title-count').textContent = `${pickersCache.length} on the floor · ${left.toLocaleString()} cases left`;
+  if (currentPickerId) await openPicker(currentPickerId);
+  else renderPickerList();
+}
+
+const whereText = (c) => `Route ${esc(c.route_number)} · ${esc(c.door || '')} · Stop ${c.stop_number}`;
+
+function renderPickerList() {
+  currentPickerId = null;
+  $('#pickers-body').innerHTML = `
+    <div class="card">
+      <div class="table-wrap">
+        <table class="table picker-table">
+          <thead><tr><th>Picker</th><th class="num">Orders done</th><th>Picked</th><th class="num">Cases left</th>
+            <th class="num">Lines left</th><th class="num">Stockouts</th><th>Working on now</th><th>Last pick</th></tr></thead>
+          <tbody>
+            ${pickersCache.map((p) => `<tr class="route-row" data-picker-row="${esc(p.picker)}" tabindex="0" role="button" aria-label="Open picker ${esc(p.picker)}">
+              <td class="truck">${esc(p.picker)}</td>
+              <td class="num">${p.orders_done} / ${p.orders}</td>
+              <td class="pct-cell">${bar(p.pct_picked)}<span class="mono">${p.pct_picked}%</span></td>
+              <td class="num">${p.cases_left}</td>
+              <td class="num">${p.lines_left}</td>
+              <td class="num">${p.stockouts ? `<span class="bad-text">${p.stockouts}</span>` : '0'}</td>
+              <td>${p.current ? `<span class="mono now-where">${whereText(p.current)}</span><div class="muted now-store">${esc(p.current.store)}</div>` : pill('good', 'check', 'All orders done')}</td>
+              <td class="mono muted">${p.last_pick ? timeOf(p.last_pick) : ''}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="muted pickers-note">Orders on the last trucks of the night haven't been released to pickers yet, so they aren't listed here.</p>`;
+}
+
+async function openPicker(id) {
+  currentPickerId = id;
+  pickerDetailCache = await api(`/api/pickers/${encodeURIComponent(id)}`);
+  renderPickerDetail();
+  window.scrollTo({ top: 0 });
+}
+
+function renderPickerDetail() {
+  const { summary: s, orders } = pickerDetailCache;
+  const onlyLeft = $('#picker-left') && $('#picker-left').checked;
+  $('#pickers-body').innerHTML = `
+    <button class="btn btn-ghost back-btn" data-picker-back>← All pickers</button>
+    <div class="card route-head">
+      <div class="route-head-main">
+        <div class="card-label">Picker</div>
+        <div class="route-number">${esc(s.picker)}</div>
+        <div class="muted">${s.current
+          ? `Working on <button class="code-link" data-open-route="${s.current.route_id}" data-store="${s.current.store_id}">${whereText(s.current)}</button> · ${esc(s.current.store)}`
+          : 'All assigned orders are done.'}</div>
+      </div>
+      <div class="route-facts">
+        <div><div class="card-label">Orders done</div><div class="fact">${s.orders_done} / ${s.orders}</div></div>
+        <div><div class="card-label">Cases left</div><div class="fact">${s.cases_left}</div></div>
+        <div><div class="card-label">Lines left</div><div class="fact">${s.lines_left}</div></div>
+        <div><div class="card-label">Stockouts</div><div class="fact">${s.stockouts}</div></div>
+        <div><div class="card-label">Picked</div><div class="fact">${s.pct_picked}%</div>${bar(s.pct_picked)}</div>
+      </div>
+      <div class="route-attention">
+        <span class="muted">${s.cases_picked} of ${s.cases} cases picked${s.last_pick ? ` · last pick ${timeOf(s.last_pick)}` : ''}</span>
+        <label class="toggle"><input type="checkbox" id="picker-left" ${onlyLeft ? 'checked' : ''}> Only what's left to pick</label>
+      </div>
+    </div>
+    ${orders.map((o, i) => {
+      const st = ORDER_STATUS[o.order_status];
+      const shown = onlyLeft ? o.lines.filter((l) => LEFT_STATUSES.includes(l.status)) : o.lines;
+      if (onlyLeft && !shown.length) return '';
+      return `<div class="card stop-card ${o.order_status === 'picking' ? 'highlight-stop' : ''}">
+        <div class="stop-head">
+          <span class="stop-num" aria-label="Order ${i + 1} of ${orders.length}">${i + 1}</span>
+          <div class="stop-info">
+            <div class="stop-name">${esc(o.store)}</div>
+            <div class="truck-link"><button class="code-link" data-open-route="${o.route_id}" data-store="${o.store_id}"
+              title="Open this stop on route ${esc(o.route_number)}">Route ${esc(o.route_number)} · ${esc(o.door || '')} · Stop ${o.stop_number}</button>
+              <span class="muted">· ${esc(o.truck_type)} · truck <span class="mono">${esc(o.truck_number)}</span> · departs ${timeOf(o.departs_at)}</span></div>
+            <div class="pallet">Order <span class="mono">${esc(o.order_number)}</span> · Pallet <span class="mono">${esc(palletLabel(o.sscc))}</span></div>
+          </div>
+          <div class="stop-totals">${pill(st.cls, st.icon, st.label)}
+            <span class="mono">${o.lines_left ? `${o.lines_left} lines · ${o.cases_left} cs left` : `${o.cases_picked}/${o.cases} cs`}</span>
+            ${o.short_lines ? pill('bad', 'x', `${o.short_lines} short`) : ''}</div>
+        </div>
+        <div class="table-wrap"><table class="table line-table">
+          <thead><tr><th>Product</th><th>Code</th><th>Zone</th><th class="num">Picked / Req</th><th>Status</th><th>Picked at</th></tr></thead>
+          <tbody>${shown.map((l) => {
+            const ls = LINE_STATUS[l.status];
+            return `<tr class="${SHORT_STATUSES.includes(l.status) ? 'short' : ''}">
+              <td><b>${esc(l.name)}</b> <span class="muted">${esc(l.pack_size)}</span></td>
+              <td><button class="code-link" data-code="${esc(l.route_code)}" title="Run a stock check on ${esc(l.route_code)}">${esc(l.route_code)}</button></td>
+              <td class="mono zone">${esc(l.zone)}</td>
+              <td class="num">${l.qty_picked} / ${l.cases}</td>
+              <td>${pill(ls.cls, ls.icon, ls.label)}</td>
+              <td class="muted picker">${l.picked_at && l.pick_status !== 'available' ? timeOf(l.picked_at) : ''}</td></tr>`;
+          }).join('')}</tbody></table></div>
+      </div>`;
+    }).join('') || '<p class="muted">Nothing left to pick.</p>'}`;
+}
+
+$('#view-pickers').addEventListener('click', (e) => {
+  if (e.target.closest('[data-picker-back]')) { renderPickerList(); window.scrollTo({ top: 0 }); return; }
+  const route = e.target.closest('[data-open-route]');
+  if (route) { goToRoute(Number(route.dataset.openRoute), Number(route.dataset.store) || null); return; }
+  const code = e.target.closest('[data-code]');
+  if (code) { checkCode(code.dataset.code); return; }
+  const row = e.target.closest('[data-picker-row]');
+  if (row) openPicker(row.dataset.pickerRow);
+});
+$('#view-pickers').addEventListener('keydown', (e) => {
+  const row = e.target.closest('[data-picker-row]');
+  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPicker(row.dataset.pickerRow); }
+});
+$('#view-pickers').addEventListener('change', (e) => { if (e.target.id === 'picker-left') renderPickerDetail(); });
 
 // ---------------------------------------------------------------- LOG view
 async function loadLog() {

@@ -84,6 +84,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(repo.pick_progress())
             if url.path == "/api/stockouts":
                 return self._send_json(repo.stockouts())
+            if url.path == "/api/pickers":
+                return self._send_json(repo.list_pickers())
+            if url.path.startswith("/api/pickers/"):
+                detail = repo.picker_detail(url.path.rsplit("/", 1)[1])
+                return self._send_json(detail) if detail else self._send_json({"error": "No such picker"}, 404)
             if url.path == "/api/find":
                 found = repo.find_pallet_or_order(q.get("q", ""))
                 return self._send_json(found) if found else self._send_json({"error": "No pallet or order found"}, 404)

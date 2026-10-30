@@ -20,6 +20,7 @@ HISTORY_DAYS = 3          # full days of history before today
 
 SCHEMA = """
 DROP TABLE IF EXISTS queue_items;
+DROP TABLE IF EXISTS other_stock;
 DROP TABLE IF EXISTS checks;
 DROP TABLE IF EXISTS order_lines;
 DROP TABLE IF EXISTS stores;
@@ -37,7 +38,19 @@ CREATE TABLE products (
     name            TEXT NOT NULL,
     pack_size       TEXT NOT NULL,
     is_active       INTEGER NOT NULL DEFAULT 1,  -- 1 = on in route program, 0 = turned off
-    turned_off_at   TEXT
+    turned_off_at   TEXT,
+    material_number TEXT,                    -- third code: the material record in the stock system
+    material_status TEXT NOT NULL DEFAULT 'Active',   -- Active / Inactive / Costing required / Costing complete / BOM required
+    procurement     TEXT NOT NULL DEFAULT 'Purchased' -- Purchased or Produced
+);
+
+-- Stock that exists but can't be picked right now: on quality hold, blocked, or still inbound.
+CREATE TABLE other_stock (
+    product_id  INTEGER NOT NULL REFERENCES products(id),
+    stock_type  TEXT NOT NULL CHECK (stock_type IN ('quality', 'blocked', 'inbound')),
+    quantity    INTEGER NOT NULL,            -- cases
+    eta         TEXT,                        -- inbound only: expected arrival
+    reference   TEXT                         -- e.g. inbound load number or hold reason
 );
 
 CREATE TABLE locations (
@@ -69,7 +82,8 @@ CREATE TABLE stores (
     name          TEXT NOT NULL,
     address       TEXT NOT NULL,
     order_number  TEXT NOT NULL,
-    sscc          TEXT                       -- pallet label (made-up SSCC barcode number)
+    sscc          TEXT,                      -- pallet label (made-up SSCC barcode number)
+    picker        TEXT                       -- picker this store's order is assigned to (NULL = not released yet)
 );
 
 CREATE TABLE order_lines (
@@ -319,25 +333,79 @@ def seed(db_path=DB_PATH, now=None):
     stock_kind = {pid: "pick" if pid in in_pick else "reserve" if pid in reserve_only else "out" for pid in ids}
     route_rank = {r[0]: n for n, r in enumerate(sorted(routes, key=lambda r: r[5]))}   # by departure
     store_route = {s[0]: s[1] for s in stores}
-    pick_rows = []
-    for sid, pid, cases in order_lines:
+
+    def route_progress(rid):
         # Trucks that leave first are picked first: early routes are done, late ones not started.
-        progress = max(0.0, min(1.0, 1.35 - route_rank[store_route[sid]] * 0.095))
-        zone = "BULK" if cases <= 30 else "LAYER" if cases < 80 else "FULL"
-        r = prng.random()
-        if r < progress:
-            # A picker who reaches a slot with no product anywhere reports a stockout.
-            status, picked = ("stockout", 0) if stock_kind[pid] == "out" else ("completed", cases)
-        elif progress > 0 and r < progress + 0.06:
-            status, picked = "in_progress", prng.randint(0, max(0, cases - 1))
-        else:
-            status, picked = "available", 0
-        worked = status != "available"
-        pick_rows.append((zone, picked, status, prng.choice(pickers) if worked else None,
-                          fmt(now - timedelta(minutes=prng.randint(3, 240))) if worked else None, sid, pid))
+        return max(0.0, min(1.0, 1.35 - route_rank[rid] * 0.095))
+
+    # Each released store order is one picker's assignment. Orders are handed out in departure
+    # order, so every picker's first orders are finished and their later ones are still waiting.
+    released = sorted((s for s in stores if route_progress(s[1]) > 0), key=lambda s: (route_rank[s[1]], s[2]))
+    store_picker = {s[0]: pickers[n % len(pickers)] for n, s in enumerate(released)}
+    conn.executemany("UPDATE stores SET picker = ? WHERE id = ?", [(p, sid) for sid, p in store_picker.items()])
+
+    # Pickers work one order at a time: their first two or three orders are finished, they are
+    # partway through the next one, and the rest haven't been started.
+    lines_by_store = {}
+    for sid, pid, cases in order_lines:
+        lines_by_store.setdefault(sid, []).append((pid, cases))
+    picker_orders = {}
+    for s in released:
+        picker_orders.setdefault(store_picker[s[0]], []).append(s[0])
+
+    pick_rows = []
+    for picker, sids in picker_orders.items():
+        done = prng.randint(2, 3)
+        # How many lines this picker has worked: whole finished orders plus part of the current one.
+        upto = [len(lines_by_store[sid]) if n < done else
+                prng.randint(1, max(1, len(lines_by_store[sid]) - 1)) if n == done else 0
+                for n, sid in enumerate(sids)]
+        clock = now - timedelta(minutes=2 * sum(upto) + 2)   # start time, so their picks run up to now
+        for n, sid in enumerate(sids):
+            lines = lines_by_store[sid]
+            worked_upto = upto[n]
+            for i, (pid, cases) in enumerate(lines):
+                if i < worked_upto:
+                    clock += timedelta(minutes=prng.randint(1, 3))
+                    # A picker who reaches a slot with no product anywhere reports a stockout.
+                    status, picked = ("stockout", 0) if stock_kind[pid] == "out" else ("completed", cases)
+                    pick_rows.append((picked, status, picker, fmt(min(clock, now)), sid, pid))
+                elif i == worked_upto and n == done:
+                    pick_rows.append((prng.randint(0, max(0, cases - 1)), "in_progress", picker, fmt(now), sid, pid))
     conn.executemany(
-        """UPDATE order_lines SET zone = ?, qty_picked = ?, pick_status = ?, picker = ?, picked_at = ?
+        """UPDATE order_lines SET qty_picked = ?, pick_status = ?, picker = ?, picked_at = ?
            WHERE store_id = ? AND product_id = ?""", pick_rows)
+
+    zone_rows = []
+    for sid, pid, cases in order_lines:
+        zone_rows.append(("BULK" if cases <= 30 else "LAYER" if cases < 80 else "FULL", sid, pid))
+    conn.executemany("UPDATE order_lines SET zone = ? WHERE store_id = ? AND product_id = ?", zone_rows)
+
+    # --- material records and stock that can't be picked (quality hold, blocked, inbound) -------
+    mrng = random.Random(5150)
+    used_mat = set()
+    out_sorted = sorted(fully_out)          # [0] and [1] are turned off earlier today (below)
+    special_status = {out_sorted[2]: "Inactive", out_sorted[3]: "Costing required"}
+    for pid in ids:
+        while True:
+            mat = f"9{mrng.randint(10000000, 99999999)}"
+            if mat not in used_mat:
+                used_mat.add(mat)
+                break
+        status = special_status.get(pid) or ("Costing complete" if mrng.random() < 0.08 else "Active")
+        procurement = "Produced" if mrng.random() < 0.2 else "Purchased"
+        conn.execute("UPDATE products SET material_number = ?, material_status = ?, procurement = ? WHERE id = ?",
+                     (mat, status, procurement, pid))
+    other_stock = [
+        (out_sorted[0], "inbound", 96, fmt(tomorrow + timedelta(hours=5, minutes=10)), f"Inbound load IL-{mrng.randint(1000, 9999)}"),
+        (out_sorted[4], "inbound", 140, fmt(tomorrow + timedelta(hours=4, minutes=25)), f"Inbound load IL-{mrng.randint(1000, 9999)}"),
+        (out_sorted[5], "inbound", 60, fmt(tomorrow + timedelta(hours=6, minutes=40)), f"Inbound load IL-{mrng.randint(1000, 9999)}"),
+        (out_sorted[6], "quality", 42, None, "Quality hold: damaged wrap"),
+        (sorted(reserve_only)[0], "blocked", 18, None, "Blocked: recount pending"),
+        (sorted(in_pick)[0], "quality", 12, None, "Quality hold: date code check"),
+    ]
+    conn.executemany("INSERT INTO other_stock (product_id, stock_type, quantity, eta, reference) VALUES (?,?,?,?,?)",
+                     other_stock)
 
     # --- check history: heavy at shift start, rare later ---------------------
     # Relative weight of checks per hour of the shift.

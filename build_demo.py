@@ -51,7 +51,13 @@ def export_seed():
             "id": p["id"], "route_code": p["route_code"], "inventory_code": p["inventory_code"],
             "brand": p["brand"], "name": p["name"], "pack_size": p["pack_size"], "is_active": p["is_active"],
             "off_time": split(p["turned_off_at"])[1] if p["turned_off_at"] else None,
+            "material_number": p["material_number"], "material_status": p["material_status"],
+            "procurement": p["procurement"],
         })
+    other_stock = []
+    for o in conn.execute("SELECT * FROM other_stock"):
+        eta_day, eta_time = split(o["eta"]) if o["eta"] else (None, None)
+        other_stock.append([o["product_id"], o["stock_type"], o["quantity"], eta_day, eta_time, o["reference"]])
     routes = []
     for r in conn.execute("SELECT * FROM routes ORDER BY id"):
         day, time = split(r["departs_at"])
@@ -77,7 +83,8 @@ def export_seed():
         "routes": routes,
         "route_items": [list(row) for row in conn.execute("SELECT route_id, product_id, cases FROM route_items")],
         "stores": [list(row) for row in conn.execute(
-            "SELECT id, route_id, stop_number, name, address, order_number, sscc FROM stores ORDER BY id")],
+            "SELECT id, route_id, stop_number, name, address, order_number, sscc, picker FROM stores ORDER BY id")],
+        "other_stock": other_stock,
         "order_lines": order_lines,
         "checks": checks,
         "shift_start": seed_module.SHIFT_START_HOUR,

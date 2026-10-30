@@ -5,6 +5,7 @@
   document.querySelectorAll('[data-try]').forEach((b) => b.addEventListener('click', () => checkCode(b.dataset.try)));
 
   $('#demo-routes').addEventListener('click', () => showView('routes'));
+  $('#demo-pickers').addEventListener('click', () => { currentPickerId = null; showView('pickers'); });
 
   $('#demo-reset').addEventListener('click', async () => {
     const ok = await confirmDialog('Reset the demo?',
@@ -13,6 +14,7 @@
     window.demoReset();
     pendingRelay = null;
     currentRouteId = null;
+    currentPickerId = null;
     $('#check-result').innerHTML = '<div class="empty-state">Scan or type a product code to check stock.</div>';
     refreshSidebar();
     showView(currentView);
