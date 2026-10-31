@@ -31,7 +31,7 @@ This happens in a heavy burst at the start of every shift, while trucks are on f
 
 - **One input, one answer.** Scan or type a code and press Enter. The code-to-code lookup and the stock search happen automatically, and the screen shows the product, all three codes (route program, inventory system, material number), tomorrow's routes, and every location with quantities.
 - **The material record and stock you can't pick yet.** Each result shows the material status (Active, Inactive, Costing required, Costing complete, BOM required) and procurement type (Purchased or Produced), plus stock on **quality hold**, **blocked**, or **inbound** with its expected arrival. When it matters, the app says what to do: an inactive material won't be restocked, so turn it off; a delivery is inbound, so turn it off for now and back on once it's received; stock on hold can't be picked unless released.
-- **A clear outcome.** **IN STOCK** shows where to send the picker in very large text. **OUT OF STOCK** gives a "Turn off product" button with a confirm step, then a reminder to tell the picker to say **EMPTY SLOT**, which the certifier marks as done.
+- **A clear outcome.** **In stock** shows where to send the picker on a yellow rack label, the same kind that hangs on the rack beam, with the location in large type. **OUT OF STOCK** gives a "Turn off product" button with a confirm step, then a reminder to tell the picker to say **EMPTY SLOT**, which the certifier marks as done.
 - **Tonight's picking at a glance.** The Truck routes screen opens with cases picked, cases left, pick progress by zone (Bulk, Layer, Full), and a list of **stockouts reported by pickers**: every product a picker found empty, how many stores and cases it shorted, and whether it still needs a certifier check. Click a code to check it.
 - **Truck routes**: every truck leaving tomorrow with its loading door, stops, cases and percent picked. Click a truck to see each store in delivery order, with its pallet label, and every line on that store's order: pick zone, cases picked out of requested, the picker and time, and a status such as **Picked**, **Stockout**, **Pick from reserve** or **Turned off**. That shows at a glance which stores will get short orders.
 - **Scan a pallet label or order number** into the same Check box to jump straight to that store's stop on its truck.
@@ -94,14 +94,14 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 ### Check (F1)
 - The big box is ready for typing as soon as the page opens. Type a code, or scan it with a barcode scanner (most scanners "type" the code and press Enter for you).
 - Press **Enter**. The app finds the product in the route program, converts it to the inventory system's code, and checks reserve and overflow, all in one step.
-- **IN STOCK** (green, ✓ check-mark icon): the location and case count appear in large text. Tell the picker, then click **Told picker: done**. If you scan the next code instead, the app marks it done for you.
-- **OUT OF STOCK** (red, ✕ icon): click **Turn off product**, then confirm. A yellow reminder appears: *"Tell the picker to say EMPTY SLOT in their headset."* When the picker has done it, click **Picker said it: mark done**.
+- **In stock** (green, check-mark icon): the location appears on a yellow rack label with its type and case count. Any other locations with stock are listed under it. Tell the picker, then click **Told picker: done**. If you scan the next code instead, the app marks it done for you.
+- **Out of stock** (red, X icon): click **Turn off product**, then confirm. A reminder appears: *"Tell the picker to say EMPTY SLOT in their headset."* When the picker has done it, click **Picker said it: mark done**.
 - Tip: you can type only the 5 digits (for example `76823` instead of `RT-76823`).
 - Scanning a **pallet label** (the long number, with or without the leading `00`) or typing a **store order number** (like `SO-799786`) opens that store's stop on its truck, highlighted.
 
 ### Truck Routes (F2)
 - **At the top:** cases picked so far, cases left to pick, stockouts reported, and lines shipping short.
-- **Pick progress by zone:** cases in each pick zone (Bulk = case picks, Layer, Full = full pallets), split into available, in progress and picked, with the percent picked and the cases lost to stockouts. The yellow row is the total.
+- **Pick progress by zone:** cases in each pick zone (Bulk = case picks, Layer, Full = full pallets), split into available, in progress and picked, with the percent picked and the cases lost to stockouts. The highlighted row is the total.
 - **Stockouts reported by pickers:** each product a picker found empty tonight, with how many stores and cases it shorted, the routes affected, and what the stock looks like now. **No stock: needs turn-off** means a certifier should check it; **Turned off** means it's already handled. Click the code to run a check.
 - **The truck list:** route, truck, loading door, area, departure time, stops, cases, percent picked, and lines that will **ship short** or must be **picked from reserve**. Search by route, truck, door or area, or filter by truck type (Route, Bulk, Transport).
 - Click a truck to open it. You'll see each store stop in delivery order, with its address, order number and pallet label, and every product on that store's order: zone, cases picked out of requested, the picker and time, and a status: ✓ Picked, 🕒 Picking now, ✕ Stockout, ⏻ Turned off, ✕ No stock, → Pick from reserve, 🕒 Ready to pick.
@@ -121,7 +121,7 @@ The sidebar on the left lists the four screens and today's counts. On a narrow w
 - Below that is every check with its time, product, code, result, what was done, and how long it took. Use the search box to filter.
 
 ### Stats (F4)
-- Checks per hour for today (glowing line) compared with the average of the previous 3 days (dashed line). Hover over the chart to see exact numbers, or open **Show as table**.
+- Checks per hour for today (yellow line) compared with the average of the previous 3 days (dashed line). Hover over the chart to see exact numbers, or open **Show as table**.
 - Tiles show today's total, average time per check, the busiest hour, and how much of the day's work fell in the first two hours of the shift.
 
 ---

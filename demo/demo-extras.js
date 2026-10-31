@@ -15,7 +15,7 @@
     pendingRelay = null;
     currentRouteId = null;
     currentPickerId = null;
-    $('#check-result').innerHTML = '<div class="empty-state">Scan or type a product code to check stock.</div>';
+    $('#check-result').innerHTML = '<div class="empty-state">Scan or type a product code to check stock</div>';
     refreshSidebar();
     showView(currentView);
     toast('Demo reset');

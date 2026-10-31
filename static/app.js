@@ -9,7 +9,11 @@ const ICON = {
   headset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M19 20c0 1.2-2 2-5 2"/></svg>',
   question: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.6 2.6 0 0 1 5 1c0 1.8-2.5 2.2-2.5 4"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg>',
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
 };
+// One icon set, one stroke.
+Object.keys(ICON).forEach((k) => { ICON[k] = ICON[k].replace(/stroke-width="[\d.]+"/, 'stroke-width="1.5"'); });
 
 // A line on a store's order: where it is in picking, or where it can be picked from.
 const LINE_STATUS = {
@@ -192,6 +196,33 @@ function sendToText(data) {
   return data.send_to.map((s) => `${s.location_id} (${s.quantity} cs)`).join(', ');
 }
 
+const LOC_TYPE = { pick: 'Pick slot', reserve: 'Reserve', overflow: 'Overflow' };
+
+// Signature: a location code with a strip of yellow rack tape.
+const locChip = (id, empty = false) => `<span class="loc${empty ? ' empty' : ''}">${esc(id)}</span>`;
+
+// A decorative barcode drawn from the location code (it looks like a rack label, it isn't a real symbology).
+function barcodeSvg(text) {
+  const widths = [2, 1, 1, 2];
+  [...text].forEach((ch) => {
+    const n = ch.charCodeAt(0) * 7 + 13;
+    widths.push((n % 3) + 1, ((n >> 2) % 2) + 1, ((n >> 3) % 3) + 1, ((n >> 1) % 2) + 1, ((n >> 4) % 3) + 1, 1);
+  });
+  widths.push(2, 3, 1, 1);
+  let x = 0;
+  const bars = widths.map((w, i) => { const r = i % 2 === 0 ? `<rect x="${x}" width="${w}" height="40"/>` : ''; x += w; return r; }).join('');
+  return `<svg viewBox="0 0 ${x} 40" preserveAspectRatio="none" fill="currentColor" aria-hidden="true">${bars}</svg>`;
+}
+
+// The moment: where to send the picker, drawn as the label on the rack beam.
+function rackLabel(s) {
+  return `<div class="rack-label">
+    <div class="rack-loc">${esc(s.location_id)}</div>
+    <div class="rack-meta"><span>${LOC_TYPE[s.type]}</span><span><b>${s.quantity}</b> cases</span></div>
+    <div class="rack-barcode">${barcodeSvg(s.location_id)}<span>${esc(s.location_id.replace(/-/g, ''))}</span></div>
+  </div>`;
+}
+
 function verdictHtml(cls, icon, title, sub) {
   return `<div class="verdict ${cls}"><span class="icon">${ICON[icon]}</span>
     <div><div class="verdict-text">${esc(title)}</div>${sub ? `<div class="verdict-sub">${sub}</div>` : ''}</div></div>`;
@@ -202,12 +233,12 @@ function detailsHtml(d) {
   const routes = d.routes.length
     ? `<table class="table"><thead><tr><th>Route</th><th>Truck</th><th>Door</th><th>Destination</th><th>Departs</th><th class="num">Cases</th></tr></thead><tbody>
         ${d.routes.map((r) => `<tr><td class="truck"><button class="code-link" data-open-route="${r.id}" title="Open route ${esc(r.route_number)}">${esc(r.route_number)}</button></td><td>${esc(r.truck_type)} · ${esc(r.truck_number)}</td>
-          <td>${esc(r.door || '')}</td><td>${esc(r.destination)}</td><td>${timeOf(r.departs_at)}</td><td class="num">${r.cases}</td></tr>`).join('')}
+          <td>${r.door ? locChip(r.door) : ''}</td><td>${esc(r.destination)}</td><td>${timeOf(r.departs_at)}</td><td class="num">${r.cases}</td></tr>`).join('')}
       </tbody></table>`
-    : '<p class="muted">Not on any of tomorrow\'s routes.</p>';
+    : '<p class="muted">Not on any of tomorrow\'s routes</p>';
   const stock = `<table class="table"><thead><tr><th>Location</th><th>Type</th><th class="num">Cases</th></tr></thead><tbody>
       ${d.stock.map((s) => `<tr class="${s.quantity === 0 ? 'zero' : (s.type !== 'pick' ? 'highlight' : '')}">
-        <td class="mono">${esc(s.location_id)}</td><td>${s.type === 'pick' ? 'Pick slot' : s.type === 'reserve' ? 'Reserve' : 'Overflow'}</td>
+        <td>${locChip(s.location_id, s.quantity === 0)}</td><td>${LOC_TYPE[s.type]}</td>
         <td class="num">${s.quantity === 0 ? '0 (empty)' : s.quantity}</td></tr>`).join('')}
       <tr><td colspan="2"><b>Pickable in building</b></td><td class="num"><b>${d.total_cases}</b></td></tr>
     </tbody></table>`;
@@ -228,7 +259,7 @@ function detailsHtml(d) {
       <div class="code-chip"><small>Material status</small>${pill(ms.cls, ms.icon, p.material_status)}</div>
       <div class="code-chip"><small>Procurement</small><span class="chip-text">${esc(p.procurement || '')}</span></div>
     </div>
-    <div class="lookup-steps">✓ Found in route program → ✓ translated to inventory code → ✓ matched material record → ✓ checked reserve, overflow, holds &amp; inbound (automatic)</div>
+    <div class="lookup-steps">Looked up automatically: route program, inventory code, material record, then reserve, overflow, holds and inbound stock</div>
     <div class="two-col">
       <div><h3 class="section-title">Tomorrow's routes (${d.routes.length})</h3><div class="table-wrap">${routes}</div></div>
       <div><h3 class="section-title">Warehouse inventory</h3><div class="table-wrap">${stock}${other}</div></div>
@@ -264,7 +295,7 @@ function renderResult(container, data, stage) {
   let top = '', actions = '';
 
   if (d.outcome === 'NOT_FOUND') {
-    container.innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'CODE NOT FOUND',
+    container.innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'Code not found',
       `<span class="mono">${esc(d.code)}</span> is not in the route program. Ask the picker to read the code again.`)}</div>`;
     return;
   }
@@ -272,40 +303,41 @@ function renderResult(container, data, stage) {
   if (d.outcome === 'IN_STOCK') {
     const first = d.send_to[0];
     const inPickOnly = first && first.type === 'pick';
-    top = verdictHtml('good', 'check', 'IN STOCK', `${d.total_cases} cases in the building`);
+    top = verdictHtml('good', 'check', 'In stock', `${d.total_cases} cases in the building`);
+    const [main, ...more] = d.send_to;
     actions = `
       <div class="send-to">
         <div class="send-to-label">Send picker to</div>
-        ${d.send_to.map((s) => `<div class="send-to-row"><span class="send-loc">${esc(s.location_id)}</span>
-          <span class="send-qty">${s.quantity} cases</span>
-          <span class="send-type">${s.type === 'pick' ? 'Pick slot' : s.type === 'reserve' ? 'Reserve' : 'Overflow'}</span></div>`).join('')}
-        ${inPickOnly ? '<div class="send-note">⚠ System shows stock in the pick slot itself. Have the picker recheck the slot, including behind and under it.</div>' : ''}
+        ${rackLabel(main)}
+        ${more.length ? `<div class="send-more"><span>Also</span>${more.map((s) =>
+          `<span>${locChip(s.location_id)} ${s.quantity} cases · ${LOC_TYPE[s.type]}</span>`).join('')}</div>` : ''}
+        ${inPickOnly ? `<div class="send-note">${ICON.alert}<span>System shows stock in the pick slot itself. Have the picker recheck the slot, including behind and under it</span></div>` : ''}
       </div>
       ${adviceHtml(d)}
       ${stage === 'relayed'
-        ? `<div class="done-banner">${ICON.check} Location relayed to picker.</div>`
+        ? `<div class="done-banner">${ICON.check} Location relayed to picker</div>`
         : `<div class="action-row"><button class="btn btn-good btn-lg" data-act="relayed">${ICON.check} Told picker: done</button>
-             <span class="muted">Checking the next code also marks this as done.</span></div>`}`;
+             <span class="muted">Checking the next code also marks this as done</span></div>`}`;
   }
 
   if (d.outcome === 'OUT_OF_STOCK' || stage === 'turned_off' || stage === 'empty_done') {
     if (stage === 'decide') {
-      top = verdictHtml('bad', 'x', 'OUT OF STOCK', 'No pickable product in pick slot, reserve, or overflow.');
+      top = verdictHtml('bad', 'x', 'Out of stock', 'No pickable product in pick slot, reserve or overflow');
       actions = `${adviceHtml(d)}<div class="action-row"><button class="btn btn-danger btn-lg" data-act="off">${ICON.power} Turn off product</button></div>`;
     } else if (stage === 'turned_off') {
-      top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is now off in the route program.');
+      top = verdictHtml('bad', 'power', 'Turned off', 'Product is now off in the route program');
       actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
           <div class="reminder-text">Tell the picker to say <b>EMPTY SLOT</b> in their headset.</div>
           <button class="btn btn-good btn-lg" data-act="empty" data-primary>${ICON.check} Picker said it: mark done</button></div>`;
     } else {
-      top = verdictHtml('bad', 'power', 'TURNED OFF', 'Product is off in the route program and the headset system.');
+      top = verdictHtml('bad', 'power', 'Turned off', 'Product is off in the route program and the headset system');
       actions = `<div class="done-banner">${ICON.headset} EMPTY SLOT confirmed. No other picker will be sent to this slot.</div>`;
     }
   }
 
   if (stage === 'already_off') {
     const at = d.product.turned_off_at ? `at ${whenOf(d.product.turned_off_at)}` : '';
-    top = verdictHtml('neutral', 'power', 'ALREADY TURNED OFF', `This product was turned off ${at}.`);
+    top = verdictHtml('neutral', 'power', 'Already turned off', `This product was turned off ${at}`);
     actions = `<div class="reminder"><span class="icon">${ICON.headset}</span>
         <div class="reminder-text">If the headset still sent the picker here, have them say <b>EMPTY SLOT</b>.</div></div>
       ${adviceHtml(d)}
@@ -353,7 +385,7 @@ function renderResult(container, data, stage) {
         if (!ok) return;
         await api(`/api/products/${d.product.id}/on`, {});
         toast('Product turned back on');
-        container.innerHTML = `<div class="done-banner">${ICON.power} ${esc(d.product.name)} · ${esc(d.product.pack_size)} is back on in the route program.</div>`;
+        container.innerHTML = `<div class="done-banner">${ICON.power} ${esc(d.product.name)} · ${esc(d.product.pack_size)} is back on in the route program</div>`;
       }
       if (what !== 'off') $('#check-input').focus({ preventScroll: true });
     } catch (err) {
@@ -380,7 +412,7 @@ $('#check-form').addEventListener('submit', async (e) => {
       const found = await api(`/api/find?q=${encodeURIComponent(code)}`);
       goToRoute(found.route_id, found.store_id);
     } catch (_) {
-      $('#check-result').innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'NOT FOUND',
+      $('#check-result').innerHTML = `<div class="result">${verdictHtml('neutral', 'question', 'Not found',
         `No pallet or store order matches <span class="mono">${esc(code)}</span>.`)}</div>`;
     }
     return;
@@ -487,7 +519,7 @@ function overviewHtml() {
           <div class="muted card-sub">Each one is a picker who found an empty slot. Click a code to check it.</div></div></div>
         ${stockoutsCache.length ? `<div class="table-wrap"><table class="table stockout-table">
           <thead><tr><th>Product</th><th>Code</th><th class="num">Stores</th><th class="num">Cases short</th><th>Routes</th><th>Stock now</th><th>Last report</th></tr></thead>
-          <tbody>${stockoutRows}</tbody></table></div>` : '<p class="muted">No stockouts reported tonight.</p>'}
+          <tbody>${stockoutRows}</tbody></table></div>` : '<p class="muted">No stockouts reported tonight</p>'}
       </div>
     </div>`;
 }
@@ -511,13 +543,13 @@ function renderRouteList() {
             ${rows.map((r) => `<tr class="route-row" data-route="${r.id}" tabindex="0" role="button" aria-label="Open route ${esc(r.route_number)}">
               <td class="truck">${esc(r.route_number)}</td>
               <td>${esc(r.truck_type)} · <span class="mono">${esc(r.truck_number)}</span></td>
-              <td class="mono">${esc(r.door || '')}</td>
+              <td>${r.door ? locChip(r.door) : ''}</td>
               <td>${esc(r.destination)}</td>
               <td class="mono">${timeOf(r.departs_at)}</td>
               <td class="num">${r.stops}</td><td class="num">${r.cases}</td>
               <td class="pct-cell">${bar(r.pct_picked)}<span class="mono">${r.pct_picked}%</span></td>
               <td>${attentionPills(r.short_lines, r.reserve_lines)}</td></tr>`).join('')
-              || '<tr><td colspan="9" class="muted">No routes match.</td></tr>'}
+              || '<tr><td colspan="9" class="muted">No routes match</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -546,7 +578,7 @@ function renderRouteDetail() {
   $('#routes-overview').hidden = true;
   $('#routes-toolbar').hidden = true;
   $('#routes-body').innerHTML = `
-    <button class="btn btn-ghost back-btn" data-back>← All routes</button>
+    <button class="btn btn-ghost back-btn" data-back>${ICON.back} All routes</button>
     <div class="card route-head">
       <div class="route-head-main">
         <div class="card-label">Route</div>
@@ -554,7 +586,7 @@ function renderRouteDetail() {
         <div class="muted">${esc(route.truck_type)} · truck <span class="mono">${esc(route.truck_number)}</span> · ${esc(route.destination)}</div>
       </div>
       <div class="route-facts">
-        <div><div class="card-label">Door</div><div class="fact mono">${esc(route.door || '')}</div></div>
+        <div><div class="card-label">Door</div><div class="fact">${route.door ? locChip(route.door) : ''}</div></div>
         <div><div class="card-label">Departs</div><div class="fact mono">${timeOf(route.departs_at)}</div></div>
         <div><div class="card-label">Stops</div><div class="fact">${stores.length}</div></div>
         <div><div class="card-label">Cases</div><div class="fact">${cases}</div></div>
@@ -590,7 +622,7 @@ function renderRouteDetail() {
               <td>${pill(st.cls, st.icon, st.label)}</td>
               <td class="muted picker">${l.picker ? `<span class="mono">${esc(l.picker)}</span> · ${timeOf(l.picked_at)}` : ''}</td></tr>`;
           }).join('')}</tbody></table></div>`
-          : '<p class="muted stop-empty">Nothing on this order needs attention.</p>'}
+          : '<p class="muted stop-empty">Nothing on this order needs attention</p>'}
       </div>`;
     }).join('')}`;
   highlightStoreId = null;
@@ -678,14 +710,14 @@ function renderPickerDetail() {
   const { summary: s, orders } = pickerDetailCache;
   const onlyLeft = $('#picker-left') && $('#picker-left').checked;
   $('#pickers-body').innerHTML = `
-    <button class="btn btn-ghost back-btn" data-picker-back>← All pickers</button>
+    <button class="btn btn-ghost back-btn" data-picker-back>${ICON.back} All pickers</button>
     <div class="card route-head">
       <div class="route-head-main">
         <div class="card-label">Picker</div>
         <div class="route-number">${esc(s.picker)}</div>
         <div class="muted">${s.current
           ? `Working on <button class="code-link" data-open-route="${s.current.route_id}" data-store="${s.current.store_id}">${whereText(s.current)}</button> · ${esc(s.current.store)}`
-          : 'All assigned orders are done.'}</div>
+          : 'All assigned orders are done'}</div>
       </div>
       <div class="route-facts">
         <div><div class="card-label">Orders done</div><div class="fact">${s.orders_done} / ${s.orders}</div></div>
@@ -730,7 +762,7 @@ function renderPickerDetail() {
               <td class="muted picker">${l.picked_at && l.pick_status !== 'available' ? timeOf(l.picked_at) : ''}</td></tr>`;
           }).join('')}</tbody></table></div>
       </div>`;
-    }).join('') || '<p class="muted">Nothing left to pick.</p>'}`;
+    }).join('') || '<p class="muted">Nothing left to pick</p>'}`;
 }
 
 $('#view-pickers').addEventListener('click', (e) => {
@@ -762,15 +794,15 @@ async function loadLog() {
           turned off ${p.turned_off_at ? whenOf(p.turned_off_at) : ''}${p.today ? ' (today)' : ''}</div></div>
         <button class="btn btn-good" data-on="${p.id}" data-name="${esc(p.name + ' · ' + p.pack_size)}">${ICON.power} Turn back on</button>
       </div>`).join('')
-    : '<p class="muted">No products are turned off.</p>';
+    : '<p class="muted">No products are turned off</p>';
 
   $('#log-body').innerHTML = log.map((r) => {
     const rp = RESULT_PILL[r.result] || { cls: 'neutral', icon: 'question' };
     return `<tr><td>${whenOf(r.started_at)}</td>
       <td>${r.name ? `<b>${esc(r.name)}</b><br><span class="muted">${esc(r.pack_size)}</span>` : '<span class="muted">Unknown code</span>'}</td>
-      <td class="mono">${esc(r.code_entered)}</td><td>${pill(rp.cls, rp.icon, r.result)}</td>
+      <td class="mono">${esc(r.code_entered)}</td><td>${pill(rp.cls, rp.icon, r.result.charAt(0) + r.result.slice(1).toLowerCase())}</td>
       <td>${esc(r.action)}</td><td class="num">${duration(r.seconds)}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" class="muted">No matching checks.</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">No matching checks</td></tr>';
 }
 
 $('#turned-off-list').addEventListener('click', async (e) => {
@@ -866,7 +898,7 @@ function drawHourChart(s) {
 
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Checks per hour today compared with the previous 3-day average">
       <defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" style="stop-color: var(--chart-fill)"/><stop offset="1" style="stop-color: var(--chart-fill); stop-opacity: 0"/>
+        <stop offset="0" style="stop-color: var(--accent-soft)"/><stop offset="1" style="stop-color: var(--accent-soft); stop-opacity: 0"/>
       </linearGradient></defs>
       ${grid}${xLabels}
       <path d="${area}" fill="url(#chart-fill)"/>
